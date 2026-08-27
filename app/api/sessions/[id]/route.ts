@@ -11,7 +11,33 @@ export async function GET(
   const session = getSession(id);
 
   if (!session) {
-    return NextResponse.json({ error: "Session not found" }, { status: 404 });
+    return NextResponse.json(
+      {
+        ok: false,
+        error: "Session not found",
+        message: `Session "${id}" was not found or has expired. In-memory sessions reset when the server restarts.`,
+        failure: {
+          title: "Session Expired or Not Found",
+          summary: `Session "${id}" could not be found. Sessions are stored in-memory and reset when the dev server restarts or reloads.`,
+          issues: [
+            {
+              file: "both" as const,
+              code: "other" as const,
+              message: `Session "${id}" is no longer active in memory.`,
+              suggestions: [
+                "Return to the Upload page to start a new evaluation session.",
+                "Re-upload your Question Paper and Answer Sheet files.",
+              ],
+            },
+          ],
+          suggestions: [
+            "Click 'Re-upload' to choose your files again.",
+            "If using sample files, click 'Load Sample Files' on the home page.",
+          ],
+        },
+      },
+      { status: 404 },
+    );
   }
 
   const { status } = session;
@@ -36,7 +62,7 @@ export async function GET(
     });
   }
 
-  // failed / error — always expose contextual failure when present
+  // Failed / error state
   return NextResponse.json({
     ok: false,
     failure: session.failure ?? {

@@ -34,37 +34,88 @@ export const EXTRACT_QUESTIONS_PROMPT = `You are extracting exam questions from 
 
 Rules:
 1. Extract EVERY question in the printed order.
-2. Treat labelled sub-parts as SEPARATE questions (e.g. "11(a)" and "11(b)" are two entries).
-3. Preserve the original numbering/label exactly in the "number" field.
-4. Include full question text (and any given data needed to answer).
-5. Capture max marks when printed; otherwise use 0.
-6. Ignore instructions/cover pages that are not questions.
-7. Return JSON only matching the schema.`;
+2. Treat labelled sub-parts as SEPARATE questions (e.g. "11(a)" and "11(b)" are two distinct entries).
+3. Preserve the original numbering/label exactly in the "number" field (e.g. "1", "2", "3(a)", "11(a)").
+4. Include full question text (and all options/data needed to answer).
+5. Max marks MUST ALWAYS be an integer >= 1 (e.g. 1, 2, 3, 5). If printed on the paper, extract it accurately; if unprinted or 0, default to 1. Never return 0 maxMarks.
+6. Ignore cover pages or instructions that are not exam questions.
+7. Return valid JSON only matching the schema: {"title":"...","subject":"...","grade":"...","questions":[{"number":"1","questionText":"...","maxMarks":1}]}`;
+
+export const EXTRACT_ANSWERS_PROMPT = `You transcribe student handwritten solutions from answer sheet page images.
+
+Tasks:
+1. Inspect each page image carefully.
+2. Extract all distinct answer sections written by the student.
+3. If the student wrote a question label (e.g. "Ans 1", "Q2", "11(a)", "Section B - 3"), capture it in the "label" field.
+4. Transcribe the full handwritten text, mathematical steps, chemical equations, and diagram descriptions into "transcription".
+5. Detect the bounding box for that handwritten answer region as "box_2d": [ymin, xmin, ymax, xmax] integers normalized to 0-1000 on THAT page.
+6. Extract student name and roll number if written on top of the first sheet.
+
+Return valid JSON only matching the schema:
+{
+  "studentName": "...",
+  "rollNumber": "...",
+  "answers": [
+    {
+      "label": "Ans 1",
+      "transcription": "...",
+      "page": 1,
+      "box_2d": [100, 50, 250, 950]
+    }
+  ]
+}`;
 
 export function buildMapAndGradePrompt(
   questionsJson: string,
+  answersJson: string,
   groundingNotes?: string,
 ): string {
   const groundingBlock = groundingNotes
-    ? `\n${groundingNotes}\n`
+    ? `\nGROUNDING / RUBRIC GUIDANCE:\n${groundingNotes}\n`
     : "";
 
-  return `You are mapping a student's handwritten answer sheet to exam questions and grading.
+  return `You are evaluating a student's handwritten exam submission.
+
 ${groundingBlock}
-Questions (JSON):
+
+QUESTIONS EXTRACTED FROM QUESTION PAPER:
 ${questionsJson}
 
-You are also given ordered page images of the answer sheet (page 1, page 2, ...).
+EXTRACTED HANDWRITTEN ANSWERS FROM ANSWER SHEET:
+${answersJson}
 
 Tasks:
-1. For each question, find the student's answer region(s) on the sheet.
-2. Transcribe the handwritten answer.
-3. Map by semantic content AND visible labels (e.g. "Ans 3", "Q11(a)") — answers may be out of order.
-4. If a question has no answer, status="unanswered", empty regions, marksObtained=0.
-5. If handwriting exists that matches no question, put it in unmappedAnswers with box_2d.
-6. Answers may span multiple pages — return multiple regions.
-7. For each region, box_2d MUST be [ymin, xmin, ymax, xmax] integers normalized to 0-1000 on THAT page image.
-8. Grade when possible: correct | partial | incorrect | unanswered. Use maxMarks from the question list when present. Prefer the grounded research brief for expected points.
-9. Write concise aiRemarks (per question). Optionally overallFeedback.
-10. Return JSON only matching the schema. Do not invent boxes for unanswered questions.`;
+1. Map each extracted answer to its corresponding question using the student's visible labels (e.g. "Ans 1", "Q3") AND semantic content (answers might be written out of order).
+2. If an answer was found for a question:
+   - status: "correct" | "partial" | "incorrect"
+   - marksObtained: award an integer or fractional mark from 0 up to maxMarks.
+   - studentAnswer: full transcribed text.
+   - regions: list of region objects with { "page": number, "box_2d": [ymin, xmin, ymax, xmax] }.
+   - aiRemarks: concise, helpful teacher feedback explaining what was correct or what was missed.
+3. If a question was NOT answered anywhere on the sheet:
+   - status: "unanswered"
+   - marksObtained: 0
+   - regions: []
+   - aiRemarks: "No answer found on the answer sheet."
+4. If there is handwritten text that does not belong to any question, add it to "unmappedAnswers" with its regions.
+5. Provide a brief constructive "overallFeedback" summary.
+
+Return valid JSON only matching the schema:
+{
+  "studentName": "...",
+  "rollNumber": "...",
+  "answers": [
+    {
+      "questionNumber": "1",
+      "studentAnswer": "...",
+      "regions": [{ "page": 1, "box_2d": [100, 50, 250, 950] }],
+      "status": "correct",
+      "marksObtained": 2,
+      "maxMarks": 2,
+      "aiRemarks": "..."
+    }
+  ],
+  "unmappedAnswers": [],
+  "overallFeedback": "..."
+}`;
 }

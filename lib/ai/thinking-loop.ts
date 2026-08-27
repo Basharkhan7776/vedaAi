@@ -1,215 +1,190 @@
-import { GoogleGenAI } from "@google/genai";
+import { jsonrepair } from "jsonrepair";
 import { z } from "zod";
+import { getClient, modelName, rotateKey } from "@/lib/ai/gemini";
 import type { ExtractQuestionsResult } from "@/lib/ai/schemas";
 import type { GroundingBrief, ThinkingStep } from "@/lib/types/evaluation";
 
-const planSchema = z.object({
+const fastBriefSchema = z.object({
   subjectGuess: z.string().default("General"),
-  researchQueries: z.array(z.string()).min(1).max(5),
+  researchQueries: z.array(z.string()).default([]),
   thinking: z.string().default(""),
-});
-
-const synthesizeSchema = z.object({
   rubricNotes: z.string().default(""),
   conceptNotes: z.string().default(""),
   gradingGuidance: z.string().default(""),
 });
 
-function getClient() {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error("GEMINI_API_KEY is not set");
-  return new GoogleGenAI({ apiKey });
-}
-
-function modelName() {
-  return process.env.GEMINI_MODEL || "gemini-3.6-flash";
+function enableGoogleSearch() {
+  return (
+    process.env.ENABLE_GOOGLE_SEARCH === "1" ||
+    process.env.ENABLE_GOOGLE_SEARCH === "true"
+  );
 }
 
 function extractJson(raw: string): unknown {
   const trimmed = raw.trim();
   const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
   const body = fenced?.[1]?.trim() || trimmed;
-  const start = body.indexOf("{");
-  const end = body.lastIndexOf("}");
-  const json = start >= 0 && end > start ? body.slice(start, end + 1) : body;
-  return JSON.parse(json);
+  try {
+    return JSON.parse(body);
+  } catch {
+    try {
+      return JSON.parse(jsonrepair(body));
+    } catch {
+      const start = body.indexOf("{");
+      const end = body.lastIndexOf("}");
+      const json = start >= 0 && end > start ? body.slice(start, end + 1) : body;
+      return JSON.parse(jsonrepair(json));
+    }
+  }
 }
 
-/**
- * Agent thinking loop:
- * 1) Plan research queries from extracted questions
- * 2) Google Search grounding (best-effort; continues if quota/tool fails)
- * 3) Synthesize rubric/concept notes for the grader
- */
+async function callThinkingModel(prompt: string, attempt = 1): Promise<string> {
+  try {
+    const res = await getClient().models.generateContent({
+      model: modelName(),
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      config: {
+        temperature: 0.1,
+        responseMimeType: "application/json",
+        maxOutputTokens: 16384,
+      },
+    });
+    return res.text || "{}";
+  } catch (err: any) {
+    const errStr = String(err?.message || "");
+    const isQuota =
+      errStr.includes("429") ||
+      errStr.includes("RESOURCE_EXHAUSTED") ||
+      errStr.includes("quota") ||
+      errStr.includes("rate-limit");
+
+    if (isQuota) {
+      console.warn(`[thinking-loop] Rate limit hit on attempt ${attempt}. Rotating API key...`);
+      rotateKey();
+    }
+
+    if (attempt <= 3) {
+      console.warn(`[thinking-loop] Retrying attempt ${attempt + 1}...`);
+      await new Promise((r) => setTimeout(r, 1200));
+      return callThinkingModel(prompt, attempt + 1);
+    }
+    throw err;
+  }
+}
+
 export async function runGroundedThinkingLoop(args: {
   extracted: ExtractQuestionsResult;
 }): Promise<GroundingBrief> {
   const steps: ThinkingStep[] = [];
   const questions = args.extracted.questions
-    .slice(0, 12)
+    .slice(0, 10)
     .map(
       (q) =>
-        `${q.number} (${q.maxMarks || "?"} marks): ${q.questionText.slice(0, 180)}`,
+        `${q.number} (${q.maxMarks || 1} marks): ${q.questionText.slice(0, 140)}`,
     )
     .join("\n");
 
-  // ---- Step 1: THINK / PLAN ----
-  const planRaw = await getClient().models.generateContent({
-    model: modelName(),
-    contents: [
-      {
-        role: "user",
-        parts: [
-          {
-            text: `You are an exam-grading research agent.
-Paper title: ${args.extracted.title || "Unknown"}
-Subject hint: ${args.extracted.subject || "Unknown"}
-Grade hint: ${args.extracted.grade || "Unknown"}
+  const prompt = `You are a fast exam-grading research agent.
+Paper: ${args.extracted.title || "Unknown"} | Subject: ${args.extracted.subject || "Unknown"} | Grade: ${args.extracted.grade || "Unknown"}
 
 Questions:
 ${questions}
 
-Think step-by-step about what external knowledge would improve marking (official board patterns, definitions, standard answers).
-Return JSON only:
+Think briefly, then return JSON ONLY:
 {
   "subjectGuess": "...",
-  "researchQueries": ["query1", "query2"],
-  "thinking": "short internal reasoning"
-}`,
-          },
-        ],
-      },
-    ],
-    config: {
-      temperature: 0.2,
-      responseMimeType: "application/json",
-    },
-  });
+  "researchQueries": ["optional query"],
+  "thinking": "1-2 sentences",
+  "rubricNotes": "how to award full/partial marks for these questions",
+  "conceptNotes": "key expected points",
+  "gradingGuidance": "practical compare-to-student-answer tips"
+}`;
 
-  const plan = planSchema.parse(extractJson(planRaw.text || "{}"));
+  let brief = {
+    subjectGuess: args.extracted.subject || "General",
+    researchQueries: [] as string[],
+    thinking: "Prepared grading guidance from the question paper.",
+    rubricNotes: "Award marks based on complete conceptual steps.",
+    conceptNotes: "Key expected points aligned with question paper.",
+    gradingGuidance: "Compare student steps against standard rubric.",
+  };
+
+  try {
+    const planText = await callThinkingModel(prompt);
+    brief = fastBriefSchema.parse(extractJson(planText));
+  } catch (thinkErr) {
+    console.warn("[thinking-loop] Fallback to default rubric brief:", thinkErr instanceof Error ? thinkErr.message : thinkErr);
+  }
+
   steps.push({
     id: "think",
     label: "Thinking",
-    detail: plan.thinking || "Planned research queries for rubric grounding.",
-  });
-  steps.push({
-    id: "plan",
-    label: "Research plan",
-    detail: plan.researchQueries.map((q, i) => `${i + 1}. ${q}`).join("\n"),
+    detail: brief.thinking || "Prepared grading guidance from the question paper.",
   });
 
-  // ---- Step 2: GOOGLE SEARCH GROUNDING ----
-  let searchNotes = "";
   let usedGoogleSearch = false;
+  let searchNotes = "";
   const sources: string[] = [];
 
-  try {
-    const searchPrompt = `Use Google Search to gather concise marking guidance for this exam.
-
-Subject: ${plan.subjectGuess}
-Queries to cover:
-${plan.researchQueries.map((q) => `- ${q}`).join("\n")}
-
-Questions overview:
-${questions}
-
-Return a compact research brief (bullet points) covering:
-- Likely board/exam style expectations
-- Key concepts / correct answer criteria per theme
-- Common student mistakes
-Cite sources inline when possible.`;
-
-    const searchRes = await getClient().models.generateContent({
-      model: modelName(),
-      contents: searchPrompt,
-      config: {
-        temperature: 0.2,
-        tools: [{ googleSearch: {} }],
-      },
-    });
-
-    searchNotes = (searchRes.text || "").trim();
-    usedGoogleSearch = true;
-
-    const chunks =
-      searchRes.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
-    for (const chunk of chunks) {
-      const uri = chunk?.web?.uri || chunk?.web?.title;
-      if (uri && typeof uri === "string") sources.push(uri);
+  // Optional Google Search
+  if (enableGoogleSearch() && brief.researchQueries.length > 0) {
+    try {
+      const searchRes = await getClient().models.generateContent({
+        model: modelName(),
+        contents: `Use Google Search. Subject: ${brief.subjectGuess}.
+Queries:\n${brief.researchQueries.map((q) => `- ${q}`).join("\n")}
+Return concise bullet marking guidance only.`,
+        config: {
+          temperature: 0.1,
+          tools: [{ googleSearch: {} }],
+          maxOutputTokens: 8192,
+        },
+      });
+      searchNotes = (searchRes.text || "").trim();
+      usedGoogleSearch = true;
+      const chunks =
+        searchRes.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+      for (const chunk of chunks) {
+        const uri = chunk?.web?.uri || chunk?.web?.title;
+        if (uri && typeof uri === "string") sources.push(uri);
+      }
+      steps.push({
+        id: "search",
+        label: "Google Search grounding",
+        detail: searchNotes.slice(0, 800) || "Search completed.",
+        sources: sources.slice(0, 6),
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Search unavailable";
+      steps.push({
+        id: "search",
+        label: "Google Search grounding (skipped)",
+        detail: message.slice(0, 200),
+      });
     }
-
-    steps.push({
-      id: "search",
-      label: "Google Search grounding",
-      detail:
-        searchNotes.slice(0, 1200) ||
-        "Search tool ran but returned empty text.",
-      sources: sources.slice(0, 8),
-    });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Search unavailable";
+  } else {
     steps.push({
       id: "search",
       label: "Google Search grounding (skipped)",
-      detail: `Continuing without live search: ${message.slice(0, 240)}`,
+      detail:
+        "Disabled for speed. Set ENABLE_GOOGLE_SEARCH=true to turn on live grounding.",
     });
-    // Lightweight non-search fallback thinking
-    const fallback = await getClient().models.generateContent({
-      model: modelName(),
-      contents: `Without web search, write a short grading brief for subject "${plan.subjectGuess}" covering the questions below. Bullets only.\n\n${questions}`,
-      config: { temperature: 0.2 },
-    });
-    searchNotes = (fallback.text || "").trim();
   }
 
-  // ---- Step 3: SYNTHESIZE NOTES FOR GRADER ----
-  const synthRaw = await getClient().models.generateContent({
-    model: modelName(),
-    contents: [
-      {
-        role: "user",
-        parts: [
-          {
-            text: `Convert this research into grader notes.
-
-Subject: ${plan.subjectGuess}
-Research brief:
-${searchNotes.slice(0, 6000)}
-
-Questions:
-${questions}
-
-Return JSON only:
-{
-  "rubricNotes": "how to award full/partial marks",
-  "conceptNotes": "key facts / expected points",
-  "gradingGuidance": "practical instructions for comparing student answers"
-}`,
-          },
-        ],
-      },
-    ],
-    config: {
-      temperature: 0.1,
-      responseMimeType: "application/json",
-    },
-  });
-
-  const synth = synthesizeSchema.parse(extractJson(synthRaw.text || "{}"));
   steps.push({
     id: "synthesize",
     label: "Synthesize grader brief",
-    detail: [synth.rubricNotes, synth.conceptNotes, synth.gradingGuidance]
+    detail: [brief.rubricNotes, brief.conceptNotes, brief.gradingGuidance]
       .filter(Boolean)
-      .join("\n\n")
-      .slice(0, 1500),
+      .join("\n")
+      .slice(0, 1000),
   });
 
   return {
-    subjectGuess: plan.subjectGuess,
-    researchQueries: plan.researchQueries,
-    rubricNotes: synth.rubricNotes,
-    conceptNotes: [synth.conceptNotes, synth.gradingGuidance]
+    subjectGuess: brief.subjectGuess,
+    researchQueries: brief.researchQueries,
+    rubricNotes: brief.rubricNotes,
+    conceptNotes: [brief.conceptNotes, brief.gradingGuidance, searchNotes]
       .filter(Boolean)
       .join("\n"),
     thinkingSteps: steps,
@@ -218,9 +193,8 @@ Return JSON only:
 }
 
 export function formatGroundingForPrompt(brief: GroundingBrief): string {
-  return `GROUNDED RESEARCH BRIEF (from agent thinking${brief.usedGoogleSearch ? " + Google Search" : ""}):
+  return `GROUNDED RESEARCH BRIEF (agent thinking${brief.usedGoogleSearch ? " + Google Search" : ""}):
 Subject: ${brief.subjectGuess}
-Queries: ${brief.researchQueries.join(" | ")}
 
 Rubric notes:
 ${brief.rubricNotes}

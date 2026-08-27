@@ -1,0 +1,4 @@
+- marking of the answer in the app is not correct also read the upper part of the question like 150 mark or 100 mark and section of the quesiton doable like a is compulsary and b or c are options
+- negative marking in the anwsers, edgecases for scrible and minus marking in it.
+- On click to any questions will show that particular highlight, inner shade of the high light should be low.
+-

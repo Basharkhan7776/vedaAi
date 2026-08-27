@@ -68,8 +68,8 @@ export async function getSession(
   const { data } = await api.get<SessionResponse>(
     `/api/sessions/${sessionId}`,
     {
-      // 202 while pending is valid
-      validateStatus: (s) => (s >= 200 && s < 300) || s === 202,
+      // 202 while pending is valid, 404 returns structured failure payload
+      validateStatus: (s) => (s >= 200 && s < 300) || s === 202 || s === 404,
     },
   );
   return data;

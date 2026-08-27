@@ -166,6 +166,7 @@ export function AnalyzerPage() {
                     src="/profile.png"
                     alt="Profile"
                     fill
+                    sizes="32px"
                     className="object-cover"
                   />
                 </div>
@@ -282,36 +283,6 @@ export function AnalyzerPage() {
                 </div>
 
                 <div className="flex-1 overflow-y-auto p-4 space-y-3.5 bg-[#FAFAFA]">
-                  {evaluation.grounding && (
-                    <div className="rounded-2xl border border-neutral-200 bg-white p-3 space-y-2">
-                      <p className="text-xs font-bold text-neutral-800 flex items-center gap-1.5">
-                        <Sparkles className="w-3.5 h-3.5 text-[#FF5722]" />
-                        Agent thinking
-                        {evaluation.grounding.usedGoogleSearch
-                          ? " + Google Search"
-                          : ""}
-                      </p>
-                      <p className="text-[11px] text-neutral-500">
-                        Subject: {evaluation.grounding.subjectGuess}
-                      </p>
-                      <ul className="space-y-1.5">
-                        {evaluation.grounding.thinkingSteps
-                          .slice(0, 4)
-                          .map((step) => (
-                            <li
-                              key={step.id}
-                              className="text-[11px] text-neutral-600"
-                            >
-                              <span className="font-semibold text-neutral-800">
-                                {step.label}:
-                              </span>{" "}
-                              {step.detail.slice(0, 160)}
-                              {step.detail.length > 160 ? "…" : ""}
-                            </li>
-                          ))}
-                      </ul>
-                    </div>
-                  )}
                   {evaluation.questions.map((question) => (
                     <QuestionCard
                       key={question.id}

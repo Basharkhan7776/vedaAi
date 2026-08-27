@@ -1,5 +1,6 @@
 import {
   extractQuestions,
+  extractHandwrittenAnswers,
   mapAnswersAndGrade,
   validateDocuments,
 } from "@/lib/ai/gemini";
@@ -25,6 +26,7 @@ import type {
   UnmappedAnswer,
 } from "@/lib/types/evaluation";
 import type {
+  ExtractAnswersResult,
   ExtractQuestionsResult,
   ValidateDocumentsResult,
 } from "@/lib/ai/schemas";
@@ -32,6 +34,7 @@ import type {
 export async function runEvaluationPipeline(sessionId: string): Promise<void> {
   const session = getSession(sessionId);
   if (!session?.questionPaper || !session.answerSheet) {
+    console.error(`❌ [pipeline] Session ${sessionId} missing uploads`);
     setSessionFailure(sessionId, {
       title: "Missing uploads",
       summary: "Both a question paper and an answer sheet are required.",
@@ -51,17 +54,32 @@ export async function runEvaluationPipeline(sessionId: string): Promise<void> {
     return;
   }
 
+  const qpSizeKb = (session.questionPaper.bytes.length / 1024).toFixed(1);
+  const asSizeKb = (session.answerSheet.bytes.length / 1024).toFixed(1);
+
+  console.log(`\n======================================================`);
+  console.log(`🚀 [pipeline] Starting Evaluation Session: ${sessionId}`);
+  console.log(`📄 Question Paper : ${session.questionPaper.name} (${qpSizeKb} KB, ${session.questionPaper.mimeType})`);
+  console.log(`📝 Answer Sheet    : ${session.answerSheet.name} (${asSizeKb} KB, ${session.answerSheet.mimeType})`);
+  console.log(`======================================================\n`);
+
   try {
+    // ------------------------------------------------------------------
+    // STEP 1: Ingest & Rasterize Answer Sheet
+    // ------------------------------------------------------------------
+    console.log(`⏳ [pipeline] [1/6] Ingesting & rasterizing answer sheet pages...`);
     setSessionStage(sessionId, "ingest_rasterize");
     let pages;
     try {
       pages = await rasterizeAnswerSheet(session.answerSheet);
       setAnswerPages(sessionId, pages);
+      console.log(`✅ [pipeline] [1/6] Rasterized ${pages.length} answer page(s) successfully.`);
     } catch (rasterErr) {
       const message =
         rasterErr instanceof Error
           ? rasterErr.message
           : "Could not read answer sheet pages";
+      console.error(`❌ [pipeline] [1/6] Rasterization failed:`, message);
       setSessionFailure(sessionId, {
         title: "Answer sheet could not be read",
         summary: message,
@@ -83,6 +101,10 @@ export async function runEvaluationPipeline(sessionId: string): Promise<void> {
       return;
     }
 
+    // ------------------------------------------------------------------
+    // STEP 2: Validate Document Context & Compatibility
+    // ------------------------------------------------------------------
+    console.log(`⏳ [pipeline] [2/6] Validating documents via Gemini AI...`);
     setSessionStage(sessionId, "validate_documents");
     const validation = await validateDocuments({
       questionPaper: session.questionPaper,
@@ -90,32 +112,92 @@ export async function runEvaluationPipeline(sessionId: string): Promise<void> {
       answerPreviewPage: pages[0],
     });
 
+    console.log(`   🔎 Validation:`, {
+      qpValid: validation.questionPaper.isValidQuestionPaper,
+      qpConfidence: `${validation.questionPaper.confidence}%`,
+      asValid: validation.answerSheet.isValidAnswerSheet,
+      asConfidence: `${validation.answerSheet.confidence}%`,
+      compatible: validation.pairLooksCompatible,
+    });
+
     if (!documentsAreUsable(validation)) {
+      console.warn(`⚠️ [pipeline] [2/6] Documents failed usability validation.`);
       setSessionFailure(sessionId, toSessionFailure(validation));
       return;
     }
+    console.log(`✅ [pipeline] [2/6] Documents validated successfully.`);
 
+    // ------------------------------------------------------------------
+    // STEP 3: Extract Questions & Max Marks (maxMarks > 0 guaranteed)
+    // ------------------------------------------------------------------
+    console.log(`⏳ [pipeline] [3/6] Extracting questions & max marks from Question Paper...`);
     setSessionStage(sessionId, "extract_questions");
     const extracted = await extractQuestions(session.questionPaper);
 
-    setSessionStage(sessionId, "thinking_loop");
+    console.log(`✅ [pipeline] [3/6] Extracted ${extracted.questions.length} questions.`);
+    console.log(`   📌 Header: "${extracted.title || 'Exam Paper'}" | Subject: "${extracted.subject || 'General'}" | Grade: "${extracted.grade || 'N/A'}"`);
+    extracted.questions.forEach((q) => {
+      console.log(`   👉 Q${q.number} (${q.maxMarks} max marks): ${q.questionText.slice(0, 75).replace(/\n/g, ' ')}...`);
+    });
+
+    // ------------------------------------------------------------------
+    // STEP 4: Extract Handwritten Answers & Spatial Regions from Sheet
+    // ------------------------------------------------------------------
+    console.log(`⏳ [pipeline] [4/6] Extracting handwritten answers & bounding boxes from sheet...`);
+    const extractedAnswers: ExtractAnswersResult = await extractHandwrittenAnswers(pages);
+
+    console.log(`✅ [pipeline] [4/6] Transcribed ${extractedAnswers.answers.length} handwritten answer section(s).`);
+    extractedAnswers.answers.forEach((ans, idx) => {
+      console.log(`   ✍️ [Answer #${idx + 1}] Label: "${ans.label || 'N/A'}" | Page: ${ans.page} | Box: [${ans.box_2d.join(', ')}] | Text: "${ans.transcription.slice(0, 60).replace(/\n/g, ' ')}..."`);
+    });
+
+    // ------------------------------------------------------------------
+    // STEP 5: Agent Thinking & Grounding Loop
+    // ------------------------------------------------------------------
     let grounding: GroundingBrief | undefined;
-    try {
-      grounding = await runGroundedThinkingLoop({ extracted });
-    } catch (thinkErr) {
-      console.warn(
-        "[pipeline] thinking loop failed; continuing without grounding",
-        thinkErr,
-      );
+    const skipThinking =
+      process.env.SKIP_THINKING_LOOP === "1" ||
+      process.env.SKIP_THINKING_LOOP === "true";
+
+    if (!skipThinking) {
+      console.log(`⏳ [pipeline] [5/6] Running agent thinking & research synthesis...`);
+      setSessionStage(sessionId, "thinking_loop");
+      try {
+        grounding = await runGroundedThinkingLoop({ extracted });
+        console.log(`✅ [pipeline] [5/6] Grounding synthesized:`, {
+          subjectGuess: grounding.subjectGuess,
+          usedGoogleSearch: grounding.usedGoogleSearch,
+        });
+      } catch (thinkErr) {
+        console.warn(
+          "⚠️ [pipeline] [5/6] Thinking loop failed; continuing without grounding:",
+          thinkErr instanceof Error ? thinkErr.message : thinkErr,
+        );
+      }
+    } else {
+      console.log(`⏩ [pipeline] [5/6] Thinking loop skipped (SKIP_THINKING_LOOP=true).`);
     }
 
+    // ------------------------------------------------------------------
+    // STEP 6: Match Answers to Questions & Grade
+    // ------------------------------------------------------------------
+    console.log(`⏳ [pipeline] [6/6] Matching answers to questions & grading via Gemini AI...`);
     setSessionStage(sessionId, "map_answers");
     const mapped = await mapAnswersAndGrade(
-      pages,
       extracted.questions,
+      extractedAnswers.answers,
       grounding ? formatGroundingForPrompt(grounding) : undefined,
     );
 
+    console.log(`✅ [pipeline] [6/6] Answer matching & grading complete.`);
+    console.log(`   📊 Total Answers Mapped: ${mapped.answers.length} | Unmapped Regions: ${mapped.unmappedAnswers?.length || 0}`);
+    mapped.answers.forEach((ans) => {
+      console.log(`   🎯 Q${ans.questionNumber} -> Status: [${ans.status.toUpperCase()}] | Score: ${ans.marksObtained}/${ans.maxMarks} | Regions: ${ans.regions.length} box(es) | Remarks: "${ans.aiRemarks.slice(0, 60)}..."`);
+    });
+
+    // ------------------------------------------------------------------
+    // Finalize Evaluation Session & Bounding Box Overlays
+    // ------------------------------------------------------------------
     setSessionStage(sessionId, "grade_feedback");
     const evaluation = buildEvaluationSession({
       sessionId,
@@ -127,9 +209,14 @@ export async function runEvaluationPipeline(sessionId: string): Promise<void> {
     });
 
     setEvaluation(sessionId, evaluation);
+
+    console.log(`\n======================================================`);
+    console.log(`🎉 [pipeline] Evaluation Complete for Session: ${sessionId}`);
+    console.log(`📈 Total Score: ${evaluation.totalMarks}/${evaluation.maxMarks} (${evaluation.percentage}%) | Grade: ${evaluation.gradeBadge}`);
+    console.log(`======================================================\n`);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown pipeline error";
-    console.error("[pipeline]", sessionId, message);
+    console.error(`❌ [pipeline] Fatal error in session ${sessionId}:`, message);
     setSessionFailure(sessionId, {
       title: "Evaluation failed",
       summary: message,
@@ -217,7 +304,7 @@ function buildEvaluationSession(args: {
   extracted: ExtractQuestionsResult;
   mapped: Awaited<ReturnType<typeof mapAnswersAndGrade>>;
   totalPages: number;
-  overallFeedback?: string;
+  overallFeedback?: string | null;
   grounding?: GroundingBrief;
 }): EvaluationSession {
   const { sessionId, extracted, mapped, totalPages, grounding } = args;
@@ -227,12 +314,12 @@ function buildEvaluationSession(args: {
 
   const questions: MappedQuestion[] = extracted.questions.map((q, index) => {
     const hit = byNumber.get(normalizeNumber(q.number));
-    const maxMarks = hit?.maxMarks || q.maxMarks || 0;
+    const maxMarks = Math.max(1, hit?.maxMarks || q.maxMarks || 1);
     const regions = (hit?.regions ?? []).map(toRegion);
     const first = regions[0];
     const status = hit?.status ?? "unanswered";
     const marksObtained =
-      status === "unanswered" ? 0 : (hit?.marksObtained ?? 0);
+      status === "unanswered" ? 0 : Math.min(maxMarks, hit?.marksObtained ?? 0);
     const transcription = hit?.studentAnswer ?? "";
 
     return {
@@ -250,7 +337,7 @@ function buildEvaluationSession(args: {
       aiRemarks:
         hit?.aiRemarks ||
         (status === "unanswered" ? "No answer found on the sheet." : ""),
-      confidence: hit?.confidence ?? (status === "unanswered" ? 0 : 80),
+      confidence: hit?.confidence ?? (status === "unanswered" ? 0 : 85),
       rubric: [],
       regions,
       page: first?.page ?? 1,
@@ -266,8 +353,7 @@ function buildEvaluationSession(args: {
     }),
   );
 
-  // If Gemini omitted box_2d (common on plain text PDFs), synthesize stacked
-  // regions so the answer-sheet UI can still highlight mapped answers.
+  // Synthesize fallback percentage boxes if Gemini omitted box_2d
   const withBoxes = applyFallbackRegions(questions);
 
   const totalMarks = withBoxes.reduce((s, q) => s + q.marksObtained, 0);

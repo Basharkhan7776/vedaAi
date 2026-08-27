@@ -104,46 +104,37 @@ export function UploadPage() {
     setEvalError(null);
     try {
       const [qpRes, asRes] = await Promise.all([
-        fetch("/fixtures/question-paper.pdf"),
-        fetch("/fixtures/answer-sheet.pdf"),
+        fetch("/sample/question.pdf"),
+        fetch("/sample/answer.pdf"),
       ]);
-      // Prefer repo fixtures via API form if public copy missing — fall back to demo flag
-      if (qpRes.ok && asRes.ok) {
-        const qpBlob = await qpRes.blob();
-        const asBlob = await asRes.blob();
-        const qpFile = new File([qpBlob], "question-paper.pdf", {
-          type: "application/pdf",
-        });
-        const asFile = new File([asBlob], "answer-sheet.pdf", {
-          type: "application/pdf",
-        });
-        setQuestionPaper({
-          name: qpFile.name,
-          size: formatSize(qpFile.size),
-          file: qpFile,
-        });
-        setAnswerSheets({
-          name: asFile.name,
-          size: formatSize(asFile.size),
-          file: asFile,
-        });
-        return;
+      if (!qpRes.ok || !asRes.ok) {
+        throw new Error("Sample PDFs not found in /public/sample");
       }
-    } catch {
-      /* demo mode below */
+      const qpBlob = await qpRes.blob();
+      const asBlob = await asRes.blob();
+      const qpFile = new File([qpBlob], "question.pdf", {
+        type: "application/pdf",
+      });
+      const asFile = new File([asBlob], "answer.pdf", {
+        type: "application/pdf",
+      });
+      setQuestionPaper({
+        name: qpFile.name,
+        size: formatSize(qpFile.size),
+        file: qpFile,
+      });
+      setAnswerSheets({
+        name: asFile.name,
+        size: formatSize(asFile.size),
+        file: asFile,
+      });
+    } catch (err) {
+      setEvalError(
+        err instanceof Error
+          ? err.message
+          : "Could not load sample question/answer PDFs",
+      );
     }
-    setQuestionPaper({
-      name: "Class_10_science_unit_test.pdf",
-      size: "2MB",
-      file: null,
-      demo: true,
-    });
-    setAnswerSheets({
-      name: "student_1_answer_sheet.pdf",
-      size: "8MB",
-      file: null,
-      demo: true,
-    });
   };
 
   const handleStartEvaluation = async () => {
