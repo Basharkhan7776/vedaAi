@@ -1,9 +1,14 @@
-import { extractQuestions, mapAnswersAndGrade } from "@/lib/ai/gemini";
+import {
+  extractQuestions,
+  mapAnswersAndGrade,
+  validateDocuments,
+} from "@/lib/ai/gemini";
 import { box2dToPct, emptyBox } from "@/lib/geometry/box";
 import { rasterizeAnswerSheet } from "@/lib/pdf/rasterize";
 import {
   setAnswerPages,
   setEvaluation,
+  setSessionFailure,
   setSessionStage,
   getSession,
 } from "@/lib/session/store";
@@ -11,21 +16,79 @@ import type {
   AnswerRegion,
   EvaluationSession,
   MappedQuestion,
+  SessionFailure,
   UnmappedAnswer,
 } from "@/lib/types/evaluation";
-import type { ExtractQuestionsResult } from "@/lib/ai/schemas";
+import type {
+  ExtractQuestionsResult,
+  ValidateDocumentsResult,
+} from "@/lib/ai/schemas";
 
 export async function runEvaluationPipeline(sessionId: string): Promise<void> {
   const session = getSession(sessionId);
   if (!session?.questionPaper || !session.answerSheet) {
-    setSessionStage(sessionId, "error", "Missing uploaded files");
+    setSessionFailure(sessionId, {
+      title: "Missing uploads",
+      summary: "Both a question paper and an answer sheet are required.",
+      issues: [
+        {
+          file: "both",
+          code: "other",
+          message: "One or both files were not received by the server.",
+          suggestions: [
+            "Upload a PDF or image question paper",
+            "Upload one student answer sheet (PDF or images)",
+          ],
+        },
+      ],
+      suggestions: ["Return to Upload and attach both files again."],
+    });
     return;
   }
 
   try {
     setSessionStage(sessionId, "ingest_rasterize");
-    const pages = await rasterizeAnswerSheet(session.answerSheet);
-    setAnswerPages(sessionId, pages);
+    let pages;
+    try {
+      pages = await rasterizeAnswerSheet(session.answerSheet);
+      setAnswerPages(sessionId, pages);
+    } catch (rasterErr) {
+      const message =
+        rasterErr instanceof Error
+          ? rasterErr.message
+          : "Could not read answer sheet pages";
+      setSessionFailure(sessionId, {
+        title: "Answer sheet could not be read",
+        summary: message,
+        issues: [
+          {
+            file: "answerSheet",
+            code: "corrupted_or_unreadable",
+            message,
+            suggestions: [
+              "Re-export the answer sheet as a clear PDF or PNG/JPEG",
+              "Ensure the file is not password-protected or corrupted",
+            ],
+          },
+        ],
+        suggestions: [
+          "Re-upload a readable scan of the handwritten answer sheet.",
+        ],
+      });
+      return;
+    }
+
+    setSessionStage(sessionId, "validate_documents");
+    const validation = await validateDocuments({
+      questionPaper: session.questionPaper,
+      answerSheet: session.answerSheet,
+      answerPreviewPage: pages[0],
+    });
+
+    if (!documentsAreUsable(validation)) {
+      setSessionFailure(sessionId, toSessionFailure(validation));
+      return;
+    }
 
     setSessionStage(sessionId, "extract_questions");
     const extracted = await extractQuestions(session.questionPaper);
@@ -46,8 +109,86 @@ export async function runEvaluationPipeline(sessionId: string): Promise<void> {
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown pipeline error";
     console.error("[pipeline]", sessionId, message);
-    setSessionStage(sessionId, "error", message);
+    setSessionFailure(sessionId, {
+      title: "Evaluation failed",
+      summary: message,
+      issues: [
+        {
+          file: "both",
+          code: "other",
+          message,
+          suggestions: [
+            "Retry with clearer scans",
+            "Confirm GEMINI_API_KEY is valid if this is a model error",
+          ],
+        },
+      ],
+      suggestions: ["Fix the issue above, then re-upload both files."],
+    });
   }
+}
+
+function documentsAreUsable(v: ValidateDocumentsResult): boolean {
+  if (!v.questionPaper.isValidQuestionPaper) return false;
+  if (!v.answerSheet.isValidAnswerSheet) return false;
+  if (!v.pairLooksCompatible) return false;
+  return true;
+}
+
+function toSessionFailure(v: ValidateDocumentsResult): SessionFailure {
+  const issues =
+    v.issues.length > 0
+      ? v.issues
+      : [
+          !v.questionPaper.isValidQuestionPaper
+            ? {
+                file: "questionPaper" as const,
+                code: "not_question_paper" as const,
+                message: v.questionPaper.notes || "Not a usable question paper.",
+                suggestions: [
+                  "Upload the printed exam question paper (PDF or clear image)",
+                ],
+              }
+            : null,
+          !v.answerSheet.isValidAnswerSheet
+            ? {
+                file: "answerSheet" as const,
+                code: "not_answer_sheet" as const,
+                message: v.answerSheet.notes || "Not a usable answer sheet.",
+                suggestions: [
+                  "Upload one student's handwritten answer sheet scan",
+                ],
+              }
+            : null,
+          !v.pairLooksCompatible
+            ? {
+                file: "both" as const,
+                code: "wrong_subject_or_mismatch" as const,
+                message:
+                  "The answer sheet does not appear to match this question paper.",
+                suggestions: [
+                  "Use the answer sheet written for this exact question paper",
+                ],
+              }
+            : null,
+        ].filter(Boolean);
+
+  const suggestions =
+    v.suggestions.length > 0
+      ? v.suggestions
+      : [
+          "Re-upload a clear question paper PDF/image",
+          "Re-upload the matching handwritten answer sheet",
+        ];
+
+  return {
+    title: "We couldn’t map these documents",
+    summary:
+      issues.map((i) => i!.message).join(" ") ||
+      "The uploaded files are not suitable for question–answer mapping.",
+    issues: issues as SessionFailure["issues"],
+    suggestions,
+  };
 }
 
 function buildEvaluationSession(args: {

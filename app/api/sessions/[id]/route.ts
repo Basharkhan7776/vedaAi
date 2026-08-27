@@ -14,15 +14,45 @@ export async function GET(
     return NextResponse.json({ error: "Session not found" }, { status: 404 });
   }
 
-  if (!session.evaluation) {
+  const { status } = session;
+
+  if (!status.terminal) {
     return NextResponse.json(
       {
-        error: "Evaluation not ready",
-        status: session.status,
+        ok: false,
+        pending: true,
+        status,
       },
-      { status: 409 },
+      { status: 202 },
     );
   }
 
-  return NextResponse.json(session.evaluation);
+  if (session.evaluation && status.ready) {
+    return NextResponse.json({
+      ok: true,
+      evaluation: session.evaluation,
+      status,
+      hasPageImages: session.answerPages.length > 0,
+    });
+  }
+
+  // failed / error — always expose contextual failure when present
+  return NextResponse.json({
+    ok: false,
+    failure: session.failure ?? {
+      title: "Evaluation failed",
+      summary: status.error || status.stageLabel || "Unknown failure",
+      issues: [
+        {
+          file: "both" as const,
+          code: "other" as const,
+          message: status.error || status.stageLabel || "Unknown failure",
+          suggestions: ["Return to Upload and try again with clearer files."],
+        },
+      ],
+      suggestions: ["Re-upload both files from the Upload page."],
+    },
+    status,
+    hasPageImages: session.answerPages.length > 0,
+  });
 }

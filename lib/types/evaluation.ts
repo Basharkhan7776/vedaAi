@@ -72,13 +72,37 @@ export type EvaluationSession = {
   unmappedAnswers: UnmappedAnswer[];
 };
 
+export type DocumentIssueCode =
+  | "not_question_paper"
+  | "not_answer_sheet"
+  | "blank_or_unreadable"
+  | "wrong_subject_or_mismatch"
+  | "corrupted_or_unreadable"
+  | "other";
+
+export type DocumentIssue = {
+  file: "questionPaper" | "answerSheet" | "both";
+  code: DocumentIssueCode;
+  message: string;
+  suggestions: string[];
+};
+
+export type SessionFailure = {
+  title: string;
+  summary: string;
+  issues: DocumentIssue[];
+  suggestions: string[];
+};
+
 export type PipelineStage =
   | "queued"
   | "ingest_rasterize"
+  | "validate_documents"
   | "extract_questions"
   | "map_answers"
   | "grade_feedback"
   | "complete"
+  | "failed"
   | "error";
 
 export type SessionStatus = {
@@ -88,7 +112,10 @@ export type SessionStatus = {
   stageLabel: string;
   progress: number;
   error?: string;
+  /** True when evaluation completed successfully */
   ready: boolean;
+  /** True when AI rejected docs or infra failed — analyzer can show failed state */
+  terminal: boolean;
 };
 
 export type StoredPage = {
@@ -111,4 +138,5 @@ export type SessionRecord = {
   answerSheet?: StoredFile;
   answerPages: StoredPage[];
   evaluation?: EvaluationSession;
+  failure?: SessionFailure;
 };

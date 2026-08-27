@@ -2,179 +2,290 @@
 
 import React from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { usePathname } from "next/navigation";
 import {
-  Sparkles,
-  Plus,
+  LayoutGrid,
+  Presentation,
   FileText,
-  Clock,
+  ClipboardList,
+  PieChart,
   Settings,
-  HelpCircle,
-  LogOut,
-  CheckCircle2,
-  ChevronRight,
-  BookOpen,
-  FolderArchive,
-  BarChart3,
-  Layers,
-  GraduationCap
+  Sparkles,
+  PanelLeftClose,
+  ChevronsRight
 } from "lucide-react";
-import { RECENT_EVALUATIONS } from "./mock-data";
 
 interface SidebarNavProps {
   className?: string;
+  isOpen?: boolean;
+  onToggle?: () => void;
   onCloseMobile?: () => void;
 }
 
-export function SidebarNav({ className = "", onCloseMobile }: SidebarNavProps) {
+// Delhi Public School Logo Badge using /delhi-public-school.png
+function DPSLogoBadge({ size = "md" }: { size?: "sm" | "md" }) {
+  const boxDim = size === "sm" ? "w-8 h-8" : "w-10 h-10";
+  return (
+    <div
+      className={`relative ${boxDim} rounded-full overflow-hidden flex items-center justify-center bg-white border border-neutral-200/80 shadow-2xs flex-shrink-0 p-0.5`}
+    >
+      <Image
+        src="/delhi-public-school.png"
+        alt="Delhi Public School"
+        width={40}
+        height={40}
+        className="w-full h-full object-contain"
+      />
+    </div>
+  );
+}
+
+// VedaAI Logo Badge using /logo.png
+function VedaLogoBadge({ size = "md" }: { size?: "sm" | "md" }) {
+  const boxDim = size === "sm" ? "w-8 h-8 rounded-lg" : "w-10 h-10 rounded-xl";
+  return (
+    <div
+      className={`${boxDim} overflow-hidden shadow-sm flex-shrink-0 flex items-center justify-center`}
+    >
+      <Image
+        src="/logo.png"
+        alt="VedaAI"
+        width={size === "sm" ? 32 : 40}
+        height={size === "sm" ? 32 : 40}
+        className="w-full h-full object-contain"
+        priority
+      />
+    </div>
+  );
+}
+
+export function SidebarNav({
+  className = "",
+  isOpen = true,
+  onToggle,
+  onCloseMobile,
+}: SidebarNavProps) {
   const pathname = usePathname();
   const isAnalyzer = pathname.includes("/analizer");
 
-  return (
-    <aside
-      className={`w-64 bg-white border-r border-neutral-200/80 flex flex-col justify-between h-full select-none ${className}`}
-    >
-      {/* Top Header & Brand */}
-      <div className="flex flex-col">
-        <div className="p-4 border-b border-neutral-100 flex items-center justify-between">
+  const navItems = [
+    {
+      label: "Home",
+      href: "/",
+      icon: LayoutGrid,
+      active: false,
+    },
+    {
+      label: "My Classroom",
+      href: "#",
+      icon: Presentation,
+      active: false,
+    },
+    {
+      label: "Assignments",
+      href: "#",
+      icon: FileText,
+      active: false,
+    },
+    {
+      label: "Exams",
+      href: isAnalyzer ? "/analizer" : "/",
+      icon: ClipboardList,
+      active: true, // Only Exams is highlighted
+    },
+    {
+      label: "My Library",
+      href: "#",
+      icon: PieChart,
+      active: false,
+    },
+  ];
+
+  // -------------------------------------------------------------
+  // 1. COLLAPSED / CLOSED STATE (Matching Image 2)
+  // -------------------------------------------------------------
+  if (!isOpen) {
+    return (
+      <aside
+        className={`w-16 bg-white rounded-3xl p-3.5 flex flex-col justify-between items-center shadow-sm border border-neutral-200/80 select-none transition-all duration-300 ${className}`}
+      >
+        {/* Top Section with clean gaps */}
+        <div className="flex flex-col items-center w-full">
+          {/* 1. Logo Badge */}
           <Link
             href="/"
             onClick={onCloseMobile}
-            className="flex items-center gap-2.5 group"
+            className="hover:scale-105 transition-transform mb-5"
+            title="VedaAI"
           >
-            <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-orange-600 via-orange-500 to-amber-400 flex items-center justify-center text-white shadow-sm shadow-orange-500/20 group-hover:scale-105 transition-transform">
-              <Sparkles className="w-4 h-4 fill-white/80" />
-            </div>
-            <div>
-              <span className="font-bold text-lg text-neutral-900 tracking-tight flex items-center gap-1.5">
-                Veda <span className="text-orange-600 font-extrabold text-xs px-1.5 py-0.5 rounded bg-orange-50 border border-orange-200">AI</span>
-              </span>
-            </div>
+            <VedaLogoBadge size="md" />
           </Link>
-        </div>
 
-        {/* New Evaluation Action Button */}
-        <div className="p-3">
-          <Link
-            href="/"
-            onClick={onCloseMobile}
-            className={`w-full py-2.5 px-3 rounded-xl flex items-center justify-center gap-2 font-medium text-sm transition-all shadow-sm ${
-              pathname === "/"
-                ? "bg-gradient-to-r from-neutral-900 to-neutral-800 text-white shadow-neutral-900/10 hover:opacity-95"
-                : "bg-orange-600 hover:bg-orange-700 text-white shadow-orange-600/20"
-            }`}
-          >
-            <Plus className="w-4 h-4" />
-            <span>New Evaluation</span>
-          </Link>
-        </div>
-
-        {/* Navigation Section */}
-        <div className="px-3 py-2">
-          <p className="px-2 pb-1.5 text-[11px] font-semibold tracking-wider text-neutral-400 uppercase">
-            Workspace
-          </p>
-          <nav className="space-y-0.5 text-sm">
-            <Link
-              href="/"
-              onClick={onCloseMobile}
-              className={`flex items-center gap-2.5 px-2.5 py-2 rounded-lg font-medium transition-colors ${
-                pathname === "/"
-                  ? "bg-orange-50/80 text-orange-700"
-                  : "text-neutral-600 hover:bg-neutral-100/80 hover:text-neutral-900"
-              }`}
+          {/* 2. AI Teacher's Toolkit Circle Icon */}
+          <div className="mb-6">
+            <button
+              type="button"
+              className="w-11 h-11 rounded-full bg-[#292A2D] border-2 border-[#F95738] shadow-[0_0_12px_rgba(249,87,56,0.4)] flex items-center justify-center text-white hover:scale-105 transition-all cursor-pointer group"
+              title="AI Teacher's Toolkit"
             >
-              <FileText className={`w-4 h-4 ${pathname === "/" ? "text-orange-600" : "text-neutral-400"}`} />
-              <span>Upload & Evaluator</span>
-            </Link>
-
-            <Link
-              href="/analizer"
-              onClick={onCloseMobile}
-              className={`flex items-center gap-2.5 px-2.5 py-2 rounded-lg font-medium transition-colors ${
-                isAnalyzer
-                  ? "bg-orange-50/80 text-orange-700"
-                  : "text-neutral-600 hover:bg-neutral-100/80 hover:text-neutral-900"
-              }`}
-            >
-              <Layers className={`w-4 h-4 ${isAnalyzer ? "text-orange-600" : "text-neutral-400"}`} />
-              <span>Evaluation Analyzer</span>
-              <span className="ml-auto text-[10px] bg-orange-100 text-orange-700 px-1.5 py-0.2 rounded-full font-semibold">
-                Live
-              </span>
-            </Link>
-          </nav>
-        </div>
-
-        {/* Recent Evaluations History */}
-        <div className="px-3 py-2">
-          <div className="flex items-center justify-between px-2 pb-1.5">
-            <p className="text-[11px] font-semibold tracking-wider text-neutral-400 uppercase">
-              Recent Evaluations
-            </p>
-            <Clock className="w-3 h-3 text-neutral-400" />
+              <Sparkles className="w-5 h-5 fill-white text-white group-hover:rotate-12 transition-transform" />
+            </button>
           </div>
 
-          <div className="space-y-1 mt-1 max-h-56 overflow-y-auto pr-0.5">
-            {RECENT_EVALUATIONS.map((evalItem) => {
-              const active = isAnalyzer && evalItem.id === "session-veda-101";
+          {/* 3. List of Nav Icons */}
+          <nav className="flex flex-col items-center gap-3 w-full">
+            {navItems.map((item) => {
+              const Icon = item.icon;
               return (
                 <Link
-                  key={evalItem.id}
-                  href="/analizer"
+                  key={item.label}
+                  href={item.href}
                   onClick={onCloseMobile}
-                  className={`group flex items-start gap-2 p-2 rounded-lg transition-all text-left ${
-                    active
-                      ? "bg-neutral-100 text-neutral-900 font-medium"
-                      : "hover:bg-neutral-50 text-neutral-600"
+                  className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all ${
+                    item.active
+                      ? "bg-[#F0F0EE] text-neutral-900 shadow-2xs font-semibold"
+                      : "text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900"
                   }`}
+                  title={item.label}
                 >
-                  <div className="mt-0.5 w-6 h-6 rounded bg-neutral-100 text-neutral-500 flex items-center justify-center flex-shrink-0 group-hover:bg-orange-100 group-hover:text-orange-600 transition-colors">
-                    <BookOpen className="w-3.5 h-3.5" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs font-medium text-neutral-800 truncate group-hover:text-orange-600 transition-colors">
-                      {evalItem.title}
-                    </p>
-                    <div className="flex items-center gap-1.5 mt-0.5 text-[10px] text-neutral-400">
-                      <span>{evalItem.student}</span>
-                      <span>•</span>
-                      <span className="font-semibold text-emerald-600">{evalItem.score}</span>
-                    </div>
-                  </div>
+                  <Icon className="w-5 h-5 stroke-[2]" />
                 </Link>
               );
             })}
-          </div>
+          </nav>
         </div>
+
+        {/* Bottom Section: Settings on top of school + expand button */}
+        <div className="flex flex-col items-center gap-3 w-full">
+          {/* Settings Icon */}
+          <Link
+            href="#"
+            className="w-10 h-10 rounded-xl flex items-center justify-center text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900 transition-all"
+            title="Settings"
+          >
+            <Settings className="w-5 h-5 stroke-[1.8]" />
+          </Link>
+
+          {/* School Badge Icon */}
+          <div
+            className="cursor-pointer hover:scale-105 transition-transform"
+            title="Delhi Public School, Bokaro Steel City"
+          >
+            <DPSLogoBadge size="sm" />
+          </div>
+
+          {/* Expand >> Toggle Button */}
+          {onToggle && (
+            <button
+              onClick={onToggle}
+              className="w-8 h-8 rounded-lg flex items-center justify-center text-neutral-500 hover:text-neutral-900 hover:bg-neutral-100 transition-colors cursor-pointer"
+              title="Expand Sidebar"
+            >
+              <ChevronsRight className="w-5 h-5 stroke-[2.5]" />
+            </button>
+          )}
+        </div>
+      </aside>
+    );
+  }
+
+  // -------------------------------------------------------------
+  // 2. EXPANDED / OPEN STATE (Matching Image 1)
+  // -------------------------------------------------------------
+  return (
+    <aside
+      className={`w-64 bg-white rounded-3xl p-5 flex flex-col justify-between shadow-sm border border-neutral-200/80 select-none transition-all duration-300 ${className}`}
+    >
+      {/* Top Header & Toolkit Button & Nav List */}
+      <div className="flex flex-col">
+        {/* 1. Brand Logo & Close Toggle */}
+        <div className="flex items-center justify-between pb-6">
+          <Link
+            href="/"
+            onClick={onCloseMobile}
+            className="flex items-center gap-3 group"
+          >
+            <VedaLogoBadge size="md" />
+            <span className="font-extrabold text-2xl text-neutral-900 tracking-tight font-sans">
+              VedaAI
+            </span>
+          </Link>
+
+          {/* Sidebar Collapse Toggle Button */}
+          {onToggle && (
+            <button
+              onClick={onToggle}
+              className="p-1.5 text-neutral-400 hover:text-neutral-800 rounded-lg hover:bg-neutral-100 transition-colors cursor-pointer"
+              title="Close Sidebar"
+            >
+              <PanelLeftClose className="w-5 h-5 stroke-[2]" />
+            </button>
+          )}
+        </div>
+
+        {/* 2. AI Teacher's Toolkit Pill Button */}
+        <div className="pt-1 pb-7">
+          <button
+            type="button"
+            className="w-full py-3 px-4 rounded-full bg-[#292A2D] text-white flex items-center justify-center gap-2.5 font-medium text-sm border-2 border-[#F95738] shadow-[0_0_14px_rgba(249,87,56,0.35)] hover:bg-[#34363A] transition-all cursor-pointer group"
+          >
+            <Sparkles className="w-4 h-4 fill-white text-white group-hover:rotate-12 transition-transform" />
+            <span className="tracking-wide">AI Teacher’s Toolkit</span>
+          </button>
+        </div>
+
+        {/* 3. Navigation List */}
+        <nav className="space-y-1.5 text-sm font-medium">
+          {navItems.map((item) => {
+            const Icon = item.icon;
+            return (
+              <Link
+                key={item.label}
+                href={item.href}
+                onClick={onCloseMobile}
+                className={`flex items-center gap-3.5 px-3.5 py-3 rounded-2xl transition-all ${
+                  item.active
+                    ? "bg-[#F0F0EE] text-neutral-900 font-semibold shadow-2xs"
+                    : "text-neutral-600 hover:bg-neutral-50 hover:text-neutral-900"
+                }`}
+              >
+                <Icon
+                  className={`w-5 h-5 ${
+                    item.active
+                      ? "text-neutral-900 stroke-[2.2]"
+                      : "text-neutral-500 stroke-[1.8]"
+                  }`}
+                />
+                <span>{item.label}</span>
+              </Link>
+            );
+          })}
+        </nav>
       </div>
 
-      {/* Footer / Account Section */}
-      <div className="p-3 border-t border-neutral-200/80 bg-neutral-50/50 space-y-2">
-        {/* Usage progress */}
-        <div className="px-2 py-1.5 rounded-lg bg-white border border-neutral-200/70 text-xs">
-          <div className="flex justify-between items-center text-[11px] text-neutral-500 font-medium mb-1">
-            <span>AI Credits</span>
-            <span className="text-neutral-800 font-semibold">1,420 / 2,000</span>
-          </div>
-          <div className="w-full bg-neutral-100 h-1.5 rounded-full overflow-hidden">
-            <div className="bg-gradient-to-r from-orange-500 to-amber-500 h-full rounded-full w-[71%]" />
-          </div>
-        </div>
+      {/* Bottom Section: Settings on top of school profile card */}
+      <div className="space-y-2.5 pt-4">
+        {/* Settings link on top of School */}
+        <Link
+          href="#"
+          className="flex items-center gap-3.5 px-3.5 py-2 text-sm font-medium text-neutral-600 hover:text-neutral-900 hover:bg-neutral-50 rounded-2xl transition-colors"
+        >
+          <Settings className="w-5 h-5 text-neutral-500 stroke-[1.8]" />
+          <span>Settings</span>
+        </Link>
 
-        {/* User Card */}
-        <div className="flex items-center justify-between p-1.5 rounded-lg hover:bg-neutral-100 transition-colors">
-          <div className="flex items-center gap-2.5 min-w-0">
-            <div className="w-8 h-8 rounded-full bg-orange-100 border border-orange-200 text-orange-700 flex items-center justify-center font-bold text-xs">
-              BK
-            </div>
-            <div className="min-w-0">
-              <p className="text-xs font-semibold text-neutral-800 truncate">Bashar Khan</p>
-              <p className="text-[10px] text-neutral-400 truncate">bashar@vedaai.com</p>
-            </div>
-          </div>
-          <div className="flex items-center text-neutral-400 hover:text-neutral-700 p-1">
-            <Settings className="w-4 h-4" />
+        {/* School Organization Card */}
+        <div className="bg-[#F0F0EE] rounded-2xl p-3 flex items-center gap-3 border border-neutral-200/60 shadow-2xs">
+          <DPSLogoBadge size="md" />
+
+          <div className="min-w-0">
+            <h4 className="font-bold text-xs text-neutral-900 truncate">
+              Delhi Public School
+            </h4>
+            <p className="text-[11px] text-neutral-500 truncate font-normal mt-0.5">
+              Bokaro Steel City
+            </p>
           </div>
         </div>
       </div>

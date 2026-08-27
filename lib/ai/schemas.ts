@@ -51,5 +51,38 @@ export const mapAndGradeResultSchema = z.object({
   overallFeedback: z.string().optional(),
 });
 
+export const documentIssueSchema = z.object({
+  file: z.enum(["questionPaper", "answerSheet", "both"]),
+  code: z.enum([
+    "not_question_paper",
+    "not_answer_sheet",
+    "blank_or_unreadable",
+    "wrong_subject_or_mismatch",
+    "corrupted_or_unreadable",
+    "other",
+  ]),
+  message: z.string(),
+  suggestions: z.array(z.string()).default([]),
+});
+
+export const validateDocumentsResultSchema = z.object({
+  questionPaper: z.object({
+    isValidQuestionPaper: z.boolean(),
+    confidence: z.number().min(0).max(100),
+    notes: z.string(),
+  }),
+  answerSheet: z.object({
+    isValidAnswerSheet: z.boolean(),
+    confidence: z.number().min(0).max(100),
+    notes: z.string(),
+  }),
+  pairLooksCompatible: z.boolean(),
+  issues: z.array(documentIssueSchema).default([]),
+  suggestions: z.array(z.string()).default([]),
+});
+
 export type ExtractQuestionsResult = z.infer<typeof extractQuestionsResultSchema>;
 export type MapAndGradeResult = z.infer<typeof mapAndGradeResultSchema>;
+export type ValidateDocumentsResult = z.infer<
+  typeof validateDocumentsResultSchema
+>;

@@ -5,6 +5,7 @@ import {
   createSession,
   setSessionFiles,
   setEvaluation,
+  setSessionFailure,
   setSessionStage,
 } from "@/lib/session/store";
 import type { StoredFile } from "@/lib/types/evaluation";
@@ -19,6 +20,8 @@ export async function POST(request: Request) {
     const questionPaper = form.get("questionPaper");
     const answerSheet = form.get("answerSheet");
     const demo = form.get("demo") === "true" || form.get("demo") === "1";
+    const forceFail =
+      form.get("forceFail") === "true" || form.get("forceFail") === "1";
 
     if (!(questionPaper instanceof File) || !(answerSheet instanceof File)) {
       return NextResponse.json(
@@ -31,14 +34,16 @@ export async function POST(request: Request) {
 
     if (demo || !hasGeminiKey()) {
       setSessionStage(session.id, "ingest_rasterize");
-      // Async-ish demo so the upload UI can poll stages
-      void runDemoPipeline(session.id);
+      void runDemoPipeline(session.id, { forceFail });
       return NextResponse.json({
         sessionId: session.id,
         demo: true,
-        message: hasGeminiKey()
-          ? "Demo mode requested"
-          : "GEMINI_API_KEY missing — using demo evaluation",
+        forceFail,
+        message: forceFail
+          ? "Demo failed-document state"
+          : hasGeminiKey()
+            ? "Demo mode requested"
+            : "GEMINI_API_KEY missing — using demo evaluation",
       });
     }
 
@@ -74,9 +79,13 @@ function guessMime(name: string) {
   return "image/jpeg";
 }
 
-async function runDemoPipeline(sessionId: string) {
+async function runDemoPipeline(
+  sessionId: string,
+  opts: { forceFail?: boolean } = {},
+) {
   const stages = [
     "ingest_rasterize",
+    "validate_documents",
     "extract_questions",
     "map_answers",
     "grade_feedback",
@@ -84,7 +93,42 @@ async function runDemoPipeline(sessionId: string) {
 
   for (const stage of stages) {
     setSessionStage(sessionId, stage);
-    await sleep(600);
+    await sleep(500);
+    if (opts.forceFail && stage === "validate_documents") {
+      setSessionFailure(sessionId, {
+        title: "We couldn’t map these documents",
+        summary:
+          "The file uploaded as the question paper does not look like an exam paper, and the answer sheet appears unrelated.",
+        issues: [
+          {
+            file: "questionPaper",
+            code: "not_question_paper",
+            message:
+              "This PDF looks like a generic document (not a numbered exam question paper).",
+            suggestions: [
+              "Upload the printed exam question paper (PDF or clear photo)",
+              "Ensure questions and marks are visible",
+            ],
+          },
+          {
+            file: "answerSheet",
+            code: "wrong_subject_or_mismatch",
+            message:
+              "The answer sheet content does not appear to match the uploaded question paper.",
+            suggestions: [
+              "Upload the handwritten answer sheet written for this exact paper",
+              "Use a clear, upright scan (avoid blank or blurred pages)",
+            ],
+          },
+        ],
+        suggestions: [
+          "Return to Upload",
+          "Attach a real question paper + matching student answer sheet",
+          "Run Start Mapping again",
+        ],
+      });
+      return;
+    }
   }
 
   setEvaluation(sessionId, {

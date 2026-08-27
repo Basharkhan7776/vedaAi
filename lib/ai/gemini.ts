@@ -2,13 +2,16 @@ import { GoogleGenAI } from "@google/genai";
 import type { StoredFile, StoredPage } from "@/lib/types/evaluation";
 import {
   EXTRACT_QUESTIONS_PROMPT,
+  VALIDATE_DOCUMENTS_PROMPT,
   buildMapAndGradePrompt,
 } from "@/lib/ai/prompts";
 import {
   extractQuestionsResultSchema,
   mapAndGradeResultSchema,
+  validateDocumentsResultSchema,
   type ExtractQuestionsResult,
   type MapAndGradeResult,
+  type ValidateDocumentsResult,
 } from "@/lib/ai/schemas";
 
 function getClient() {
@@ -76,6 +79,35 @@ async function generateJson<T>(
   }
 
   return schema.parse(parsed);
+}
+
+export async function validateDocuments(args: {
+  questionPaper: StoredFile;
+  answerSheet: StoredFile;
+  answerPreviewPage?: StoredPage;
+}): Promise<ValidateDocumentsResult> {
+  const parts: ContentPart[] = [
+    {
+      text: "Validate these two uploads for question extraction and answer mapping.",
+    },
+    { text: `QUESTION_PAPER filename: ${args.questionPaper.name}` },
+    filePart(args.questionPaper),
+    { text: `ANSWER_SHEET filename: ${args.answerSheet.name}` },
+    filePart(args.answerSheet),
+  ];
+
+  if (args.answerPreviewPage) {
+    parts.push({
+      text: `ANSWER_SHEET page ${args.answerPreviewPage.page} (raster preview):`,
+    });
+    parts.push(pagePart(args.answerPreviewPage));
+  }
+
+  return generateJson(
+    parts,
+    validateDocumentsResultSchema,
+    VALIDATE_DOCUMENTS_PROMPT,
+  );
 }
 
 export async function extractQuestions(

@@ -1,15 +1,11 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import localFont from "next/font/local";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
+const bricolageGrotesque = localFont({
+  src: "../public/font/Bricolage_Grotesque/BricolageGrotesque-VariableFont_opsz,wdth,wght.ttf",
+  variable: "--font-bricolage",
+  display: "swap",
 });
 
 export const metadata: Metadata = {
@@ -23,8 +19,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className="h-full antialiased">
-      <body className={`${geistSans.variable} ${geistMono.variable} min-h-full flex flex-col font-sans bg-[#FBFBFA]`}>
+    <html lang="en" className={`h-full antialiased ${bricolageGrotesque.variable}`}>
+      <body className={`${bricolageGrotesque.className} min-h-full flex flex-col font-sans bg-[#FBFBFA]`}>
         {children}
       </body>
     </html>

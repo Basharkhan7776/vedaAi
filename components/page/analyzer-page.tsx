@@ -1,359 +1,249 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import Image from "next/image";
 import {
-  ChevronLeft,
-  Share2,
-  Download,
-  RotateCw,
-  Sparkles,
-  Search,
-  Filter,
-  CheckCircle2,
-  AlertTriangle,
-  XCircle,
-  Menu,
-  GraduationCap,
-  Award,
-  BookOpen,
   ArrowLeft,
-  Eye,
-  Layers,
-  ChevronRight
+  Clipboard,
+  CircleHelp,
+  Bell,
+  ChevronDown,
+  Sparkles,
+  Menu
 } from "lucide-react";
 import { SidebarNav } from "./sidebar-nav";
 import { DocumentViewer } from "./document-viewer";
 import { QuestionCard } from "./question-card";
-import { SAMPLE_EVALUATION, QuestionEvaluation, EvaluationSession } from "./mock-data";
+import { SAMPLE_EVALUATION } from "./mock-data";
 
 export function AnalyzerPage() {
-  const searchParams = useSearchParams();
-  const [sessionData, setSessionData] = useState<EvaluationSession>(SAMPLE_EVALUATION);
-  const [sessionId, setSessionId] = useState<string | null>(null);
-  const [hasPageImages, setHasPageImages] = useState(false);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [selectedQuestionId, setSelectedQuestionId] = useState<string>("q1");
+  const [sessionData] = useState(SAMPLE_EVALUATION);
+  const [selectedQuestionId, setSelectedQuestionId] = useState<string>("q2"); // Q2 active by default matching Figma
   const [currentPage, setCurrentPage] = useState<number>(1);
-  const [filterStatus, setFilterStatus] = useState<"all" | "correct" | "partial" | "incorrect" | "unanswered">("all");
-  const [searchQuery, setSearchQuery] = useState<string>("");
+  const [sidebarOpen, setSidebarOpen] = useState(false); // Collapsed rail on left matching Figma
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [mobileActiveTab, setMobileActiveTab] = useState<"questions" | "document">("questions");
+  const [expandAll, setExpandAll] = useState(false);
 
-  useEffect(() => {
-    const fromQuery = searchParams.get("session");
-    const fromStorage =
-      typeof window !== "undefined"
-        ? sessionStorage.getItem("veda-session-id")
-        : null;
-    const id = fromQuery || fromStorage;
-    if (!id) return;
-
-    setSessionId(id);
-    let cancelled = false;
-
-    (async () => {
-      try {
-        const res = await fetch(`/api/sessions/${id}`);
-        if (!res.ok) {
-          if (res.status === 404) {
-            setLoadError(null);
-            return;
-          }
-          throw new Error("Could not load evaluation session");
-        }
-        const data = (await res.json()) as EvaluationSession;
-        if (cancelled) return;
-        setSessionData({
-          ...data,
-          unmappedAnswers: data.unmappedAnswers ?? [],
-        });
-        setSelectedQuestionId(data.questions[0]?.id ?? "q1");
-        setCurrentPage(data.questions[0]?.page ?? 1);
-
-        const pageProbe = await fetch(`/api/sessions/${id}/pages/1`);
-        setHasPageImages(pageProbe.ok);
-      } catch (err) {
-        if (!cancelled) {
-          setLoadError(err instanceof Error ? err.message : "Load failed");
-        }
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [searchParams]);
-
-  // Handle selecting a question: auto sync page with the question's page
   const handleSelectQuestion = (qId: string) => {
     setSelectedQuestionId(qId);
     const targetQ = sessionData.questions.find((q) => q.id === qId);
-    if (targetQ) {
-      const page =
-        targetQ.regions?.[0]?.page ?? targetQ.page ?? currentPage;
-      if (page !== currentPage) setCurrentPage(page);
+    if (targetQ && targetQ.page !== currentPage) {
+      setCurrentPage(targetQ.page);
     }
   };
 
-  // Teacher manual override update
-  const handleUpdateScore = (qId: string, newScore: number, newRemarks?: string) => {
-    setSessionData((prev) => {
-      const updatedQuestions = prev.questions.map((q) => {
-        if (q.id === qId) {
-          const updatedStatus: QuestionEvaluation["status"] =
-            newScore === q.maxMarks
-              ? "correct"
-              : newScore > 0
-                ? "partial"
-                : "incorrect";
-          return {
-            ...q,
-            marksObtained: newScore,
-            status: updatedStatus,
-            aiRemarks: newRemarks || q.aiRemarks,
-          };
-        }
-        return q;
-      });
-
-      const newTotal = updatedQuestions.reduce((acc, q) => acc + q.marksObtained, 0);
-      const newPercentage = Number(((newTotal / prev.maxMarks) * 100).toFixed(1));
-
-      return {
-        ...prev,
-        questions: updatedQuestions,
-        totalMarks: newTotal,
-        percentage: newPercentage,
-      };
-    });
-  };
-
-  // Filtered Questions List
-  const filteredQuestions = sessionData.questions.filter((q) => {
-    const matchesFilter = filterStatus === "all" || q.status === filterStatus;
-    const matchesSearch =
-      q.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      q.questionText.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      `q${q.questionNumber}`.toLowerCase().includes(searchQuery.toLowerCase());
-    return matchesFilter && matchesSearch;
-  });
-
-  const correctCount = sessionData.questions.filter((q) => q.status === "correct").length;
-  const partialCount = sessionData.questions.filter((q) => q.status === "partial").length;
-  const incorrectCount = sessionData.questions.filter((q) => q.status === "incorrect").length;
-
   return (
-    <div className="flex h-screen w-full bg-[#FBFBFA] overflow-hidden text-neutral-900">
-      {/* Desktop Sidebar */}
-      <div className="hidden lg:block h-full flex-shrink-0">
-        <SidebarNav />
+    <div className="flex h-screen w-full bg-[#EBEBE8] p-2 md:p-3.5 gap-3 overflow-hidden text-neutral-900 font-sans">
+      {/* Desktop Collapsed Sidebar Rail (Matching Figma Image 1) */}
+      <div className="hidden md:flex h-full flex-shrink-0 transition-all duration-300">
+        <SidebarNav
+          isOpen={sidebarOpen}
+          onToggle={() => setSidebarOpen(!sidebarOpen)}
+        />
       </div>
 
       {/* Mobile Drawer */}
       {mobileMenuOpen && (
-        <div className="fixed inset-0 z-50 flex lg:hidden">
+        <div className="fixed inset-0 z-50 flex md:hidden">
           <div
             className="fixed inset-0 bg-neutral-900/50 backdrop-blur-xs"
             onClick={() => setMobileMenuOpen(false)}
           />
-          <div className="relative z-10 w-72 bg-white h-full shadow-2xl">
-            <SidebarNav onCloseMobile={() => setMobileMenuOpen(false)} />
+          <div className="relative z-10 w-72 bg-white h-full shadow-2xl p-3">
+            <SidebarNav
+              isOpen={true}
+              onCloseMobile={() => setMobileMenuOpen(false)}
+            />
           </div>
         </div>
       )}
 
-      {/* Main Analyzer Canvas */}
-      <div className="flex-1 flex flex-col h-full min-w-0">
-        {/* Top Evaluation Header Bar */}
-        <header className="px-4 py-2.5 bg-white border-b border-neutral-200/80 flex flex-wrap items-center justify-between gap-3 flex-shrink-0 select-none">
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => setMobileMenuOpen(true)}
-              className="p-1.5 -ml-1 text-neutral-600 hover:text-neutral-900 lg:hidden rounded-lg hover:bg-neutral-100"
-            >
-              <Menu className="w-5 h-5" />
-            </button>
+      {/* Main Analyzer Floating Canvas Card */}
+      <div className="flex-1 flex flex-col h-full min-w-0 bg-white bg-gradient-to-t from-neutral-200/40 via-neutral-100/15 to-white rounded-2xl md:rounded-3xl border border-neutral-200/80 shadow-sm overflow-hidden">
+        {/* Top Header Bar */}
+        <header className="h-16 px-4 md:px-8 border-b border-neutral-100 flex items-center justify-between flex-shrink-0 select-none">
+          {/* ========================================================= */}
+          {/* 1. MOBILE TOP BAR (Exact match with reference image)      */}
+          {/* ========================================================= */}
+          <div className="flex md:hidden items-center justify-between w-full">
+            <div className="flex items-center gap-3">
+              <Link
+                href="/"
+                className="text-neutral-900 hover:text-neutral-600 transition-colors p-1 -ml-1"
+                title="Back to Upload"
+              >
+                <ArrowLeft className="w-6 h-6 stroke-[2.5]" />
+              </Link>
+              <span className="font-extrabold text-xl text-neutral-900 tracking-tight font-sans">
+                VedaAI
+              </span>
+            </div>
 
-            <Link
-              href="/"
-              className="p-1.5 rounded-lg border border-neutral-200 hover:bg-neutral-50 text-neutral-600 hover:text-neutral-900 transition-colors"
-              title="Back to Upload"
-            >
-              <ArrowLeft className="w-4 h-4" />
-            </Link>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                className="relative w-10 h-10 rounded-full bg-[#F5F5F3] hover:bg-neutral-200/80 flex items-center justify-center text-neutral-800 transition-colors cursor-pointer"
+                title="Notifications"
+              >
+                <Bell className="w-5 h-5 stroke-[2]" />
+                <span className="absolute top-1.5 right-1.5 w-2.5 h-2.5 rounded-full bg-[#F95738] ring-2 ring-white" />
+              </button>
 
-            <div>
-              <div className="flex items-center gap-2">
-                <h1 className="text-sm md:text-base font-bold text-neutral-900 truncate">
-                  {sessionData.title}
-                </h1>
-                <span className="text-[10px] bg-orange-100 text-orange-800 font-bold px-2 py-0.5 rounded-full border border-orange-200">
-                  AI Evaluated
-                </span>
+              <div className="w-10 h-10 rounded-full overflow-hidden flex-shrink-0 shadow-2xs border border-neutral-200/80">
+                <Image
+                  src="/profile.png"
+                  alt="User Profile"
+                  width={40}
+                  height={40}
+                  className="w-full h-full object-cover"
+                />
               </div>
-              <p className="text-xs text-neutral-500">
-                Student: <span className="font-medium text-neutral-800">{sessionData.studentName}</span> ({sessionData.rollNumber}) • {sessionData.grade}
-              </p>
+
+              <button
+                onClick={() => setMobileMenuOpen(true)}
+                className="p-1.5 text-neutral-900 hover:text-neutral-600 transition-colors"
+                title="Open Menu"
+              >
+                <Menu className="w-6 h-6 stroke-[2.5]" />
+              </button>
             </div>
           </div>
 
-          {/* Score Chip & Actions */}
-          <div className="flex items-center gap-2.5">
-            {/* Total Marks Pill */}
-            <div className="flex items-center gap-2 bg-gradient-to-r from-orange-50 to-amber-50 border border-orange-200/80 px-3.5 py-1.5 rounded-xl shadow-xs">
-              <Award className="w-4 h-4 text-orange-600" />
-              <div>
-                <div className="text-xs font-bold text-neutral-900 flex items-center gap-1">
-                  <span>Score:</span>
-                  <span className="text-orange-700 font-mono text-sm">
-                    {sessionData.totalMarks}/{sessionData.maxMarks}
-                  </span>
-                  <span className="text-neutral-400 font-normal">
-                    ({sessionData.percentage}%)
-                  </span>
-                </div>
+          {/* ========================================================= */}
+          {/* 2. DESKTOP TOP BAR (Exact match with Image 1)             */}
+          {/* ========================================================= */}
+          <div className="hidden md:flex items-center justify-between w-full">
+            {/* Left: Back Button in circle + Exams */}
+            <div className="flex items-center gap-3">
+              <Link
+                href="/"
+                className="w-9 h-9 rounded-full bg-white hover:bg-neutral-50 flex items-center justify-center text-neutral-800 transition-colors shadow-2xs border border-neutral-200/80 cursor-pointer"
+                title="Back to Upload"
+              >
+                <ArrowLeft className="w-4 h-4 stroke-[2]" />
+              </Link>
+
+              <div className="flex items-center gap-2 text-neutral-400 font-medium text-base ml-1">
+                <Clipboard className="w-5 h-5 stroke-[1.8]" />
+                <span className="tracking-tight text-neutral-400">Exams</span>
               </div>
             </div>
 
-            {/* Export & Actions */}
-            <button
-              onClick={() => alert("Exporting PDF evaluation report...")}
-              className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-neutral-900 text-white hover:bg-neutral-800 transition-colors shadow-xs"
-            >
-              <Download className="w-3.5 h-3.5" />
-              <span>Export PDF</span>
-            </button>
+            {/* Right: Help + Bell + Sparkle + Madhur Rastogi dropdown */}
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                className="w-9 h-9 rounded-full bg-[#F5F5F3] hover:bg-neutral-200/70 flex items-center justify-center text-neutral-700 transition-colors cursor-pointer"
+                title="Help"
+              >
+                <CircleHelp className="w-5 h-5 stroke-[1.8]" />
+              </button>
+
+              <button
+                type="button"
+                className="relative w-9 h-9 rounded-full bg-[#F5F5F3] hover:bg-neutral-200/70 flex items-center justify-center text-neutral-700 transition-colors cursor-pointer"
+                title="Notifications"
+              >
+                <Bell className="w-5 h-5 stroke-[1.8]" />
+                <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-[#F95738] ring-2 ring-white" />
+              </button>
+
+              <button
+                type="button"
+                className="w-9 h-9 rounded-full bg-[#F5F5F3] hover:bg-neutral-200/70 flex items-center justify-center text-neutral-700 transition-colors cursor-pointer"
+                title="AI Assistant"
+              >
+                <Sparkles className="w-4 h-4 fill-neutral-700 text-neutral-700" />
+              </button>
+
+              <div className="flex items-center gap-2.5 pl-1 pr-1.5 py-1 rounded-full hover:bg-neutral-100/80 transition-colors cursor-pointer select-none">
+                <div className="w-8 h-8 rounded-full overflow-hidden border border-neutral-200 shadow-2xs relative flex-shrink-0">
+                  <Image
+                    src="/profile.png"
+                    alt="Madhur Rastogi"
+                    width={32}
+                    height={32}
+                    className="w-full h-full object-cover"
+                  />
+                </div>
+                <span className="text-sm font-semibold text-neutral-800 tracking-tight">
+                  Madhur Rastogi
+                </span>
+                <ChevronDown className="w-4 h-4 text-neutral-500 stroke-[2]" />
+              </div>
+            </div>
           </div>
         </header>
 
-        {/* Mobile View Switcher Tabs */}
-        <div className="flex md:hidden bg-white border-b border-neutral-200 p-1.5">
+        {/* Mobile View Segmented Switcher Tabs (Matching Mobile Screenshot) */}
+        <div className="flex md:hidden bg-neutral-100/80 p-1 rounded-full mx-4 my-2.5 shadow-2xs border border-neutral-200/60">
           <button
             onClick={() => setMobileActiveTab("questions")}
-            className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-colors flex items-center justify-center gap-1.5 ${
+            className={`flex-1 py-2 text-xs font-bold rounded-full transition-all flex items-center justify-center ${
               mobileActiveTab === "questions"
-                ? "bg-orange-50 text-orange-700 shadow-xs"
-                : "text-neutral-500 hover:text-neutral-800"
+                ? "bg-[#292A2D] text-white shadow-xs"
+                : "text-neutral-600 hover:text-neutral-900"
             }`}
           >
-            <BookOpen className="w-3.5 h-3.5" />
-            <span>Questions & Rubric ({sessionData.questions.length})</span>
+            <span>Questions</span>
           </button>
           <button
             onClick={() => setMobileActiveTab("document")}
-            className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-colors flex items-center justify-center gap-1.5 ${
+            className={`flex-1 py-2 text-xs font-bold rounded-full transition-all flex items-center justify-center ${
               mobileActiveTab === "document"
-                ? "bg-orange-50 text-orange-700 shadow-xs"
-                : "text-neutral-500 hover:text-neutral-800"
+                ? "bg-[#292A2D] text-white shadow-xs"
+                : "text-neutral-600 hover:text-neutral-900"
             }`}
           >
-            <Eye className="w-3.5 h-3.5" />
-            <span>Answer Sheet (P.{currentPage})</span>
+            <span>Answer Sheet</span>
           </button>
         </div>
 
         {/* Split-View Workspace Area */}
-        <div className="flex-1 flex overflow-hidden p-3 md:p-4 gap-4">
-          {/* Left Column: Questions Breakdown List */}
+        <div className="flex-1 flex overflow-hidden p-3 md:p-4 gap-4 bg-[#F8F8F6]">
+          {/* ========================================================= */}
+          {/* Left Column: Extracted Questions (Matching Image 1 & 2)   */}
+          {/* ========================================================= */}
           <div
-            className={`w-full md:w-[48%] lg:w-[45%] flex flex-col h-full bg-white rounded-2xl border border-neutral-200/90 shadow-xs overflow-hidden ${
+            className={`w-full md:w-[48%] lg:w-[46%] flex flex-col h-full bg-white rounded-2xl border border-neutral-200/90 shadow-xs overflow-hidden ${
               mobileActiveTab === "document" ? "hidden md:flex" : "flex"
             }`}
           >
-            {/* Filter & Search Bar */}
-            <div className="p-3.5 border-b border-neutral-200/80 space-y-2.5 bg-neutral-50/40">
-              {/* Quick Performance Stats Pills */}
-              <div className="grid grid-cols-3 gap-2 text-center text-xs">
-                <div className="bg-white p-2 rounded-xl border border-neutral-200/80">
-                  <p className="text-[10px] text-neutral-400 font-bold uppercase">Questions</p>
-                  <p className="font-extrabold text-neutral-900 text-sm">
-                    {sessionData.questions.length}
-                  </p>
-                </div>
-                <div className="bg-emerald-50/70 p-2 rounded-xl border border-emerald-200/70">
-                  <p className="text-[10px] text-emerald-700 font-bold uppercase">Full Marks</p>
-                  <p className="font-extrabold text-emerald-800 text-sm">{correctCount}</p>
-                </div>
-                <div className="bg-amber-50/70 p-2 rounded-xl border border-amber-200/70">
-                  <p className="text-[10px] text-amber-700 font-bold uppercase">Partial</p>
-                  <p className="font-extrabold text-amber-800 text-sm">{partialCount}</p>
-                </div>
-              </div>
+            {/* Header: Extracted Questions + Expand All button */}
+            <div className="px-5 py-4 border-b border-neutral-100 flex items-center justify-between flex-shrink-0 bg-white">
+              <h2 className="font-bold text-sm sm:text-base text-neutral-900 tracking-tight">
+                Extracted Questions <span className="text-neutral-600 font-normal">(from question paper)</span>
+              </h2>
 
-              {/* Filter Tabs */}
-              <div className="flex items-center gap-1.5 overflow-x-auto text-xs pb-0.5">
-                <button
-                  onClick={() => setFilterStatus("all")}
-                  className={`px-2.5 py-1 rounded-lg font-semibold transition-colors flex-shrink-0 ${
-                    filterStatus === "all"
-                      ? "bg-neutral-900 text-white"
-                      : "bg-white border border-neutral-200 text-neutral-600 hover:bg-neutral-100"
-                  }`}
-                >
-                  All ({sessionData.questions.length})
-                </button>
-                <button
-                  onClick={() => setFilterStatus("correct")}
-                  className={`px-2.5 py-1 rounded-lg font-semibold transition-colors flex-shrink-0 ${
-                    filterStatus === "correct"
-                      ? "bg-emerald-700 text-white"
-                      : "bg-white border border-neutral-200 text-emerald-700 hover:bg-emerald-50"
-                  }`}
-                >
-                  Correct ({correctCount})
-                </button>
-                <button
-                  onClick={() => setFilterStatus("partial")}
-                  className={`px-2.5 py-1 rounded-lg font-semibold transition-colors flex-shrink-0 ${
-                    filterStatus === "partial"
-                      ? "bg-amber-700 text-white"
-                      : "bg-white border border-neutral-200 text-amber-800 hover:bg-amber-50"
-                  }`}
-                >
-                  Partial ({partialCount})
-                </button>
-              </div>
-
-              {/* Search Box */}
-              <div className="relative">
-                <Search className="w-3.5 h-3.5 text-neutral-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Search questions, concepts, or formulas..."
-                  className="w-full pl-8 pr-3 py-1.5 bg-white border border-neutral-200 rounded-xl text-xs text-neutral-900 placeholder:text-neutral-400 focus:outline-hidden focus:border-orange-500 focus:ring-1 focus:ring-orange-500"
-                />
-              </div>
+              <button
+                type="button"
+                onClick={() => setExpandAll(!expandAll)}
+                className="hidden sm:inline-flex items-center text-xs font-semibold px-3.5 py-1 bg-white border border-neutral-200 hover:border-neutral-300 rounded-full text-neutral-700 shadow-2xs hover:bg-neutral-50 transition-colors cursor-pointer"
+              >
+                {expandAll ? "Collapse All" : "Expand All"}
+              </button>
             </div>
 
             {/* Questions Scrollable List */}
-            <div className="flex-1 overflow-y-auto p-3 space-y-3">
-              {filteredQuestions.length === 0 ? (
-                <div className="p-8 text-center text-neutral-400 text-xs">
-                  No questions match your filter criteria.
-                </div>
-              ) : (
-                filteredQuestions.map((question) => (
-                  <QuestionCard
-                    key={question.id}
-                    question={question}
-                    isSelected={selectedQuestionId === question.id}
-                    onSelect={() => handleSelectQuestion(question.id)}
-                    onUpdateScore={(newScore, newRemarks) =>
-                      handleUpdateScore(question.id, newScore, newRemarks)
-                    }
-                  />
-                ))
-              )}
+            <div className="flex-1 overflow-y-auto p-4 space-y-3.5 bg-[#FAFAFA]">
+              {sessionData.questions.map((question) => (
+                <QuestionCard
+                  key={question.id}
+                  question={question}
+                  isSelected={selectedQuestionId === question.id || expandAll}
+                  onSelect={() => handleSelectQuestion(question.id)}
+                />
+              ))}
             </div>
           </div>
 
-          {/* Right Column: Scanned & Annotated Answer Sheet Document Viewer */}
+          {/* ========================================================= */}
+          {/* Right Column: Answer Sheet Document Viewer (Empty PDF)    */}
+          {/* ========================================================= */}
           <div
-            className={`w-full md:w-[52%] lg:w-[55%] h-full flex flex-col ${
+            className={`w-full md:w-[52%] lg:w-[54%] h-full flex flex-col ${
               mobileActiveTab === "questions" ? "hidden md:flex" : "flex"
             }`}
           >
@@ -364,7 +254,6 @@ export function AnalyzerPage() {
               currentPage={currentPage}
               onPageChange={setCurrentPage}
               totalPages={sessionData.totalPages}
-              sessionId={hasPageImages ? sessionId : null}
             />
           </div>
         </div>

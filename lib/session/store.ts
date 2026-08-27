@@ -1,6 +1,7 @@
 import type {
   EvaluationSession,
   PipelineStage,
+  SessionFailure,
   SessionRecord,
   SessionStatus,
   StoredFile,
@@ -10,16 +11,20 @@ import type {
 const STAGE_LABELS: Record<PipelineStage, string> = {
   queued: "Queued…",
   ingest_rasterize: "Ingesting & rendering answer sheet pages…",
+  validate_documents: "Checking that uploaded files look like a QP and answer sheet…",
   extract_questions: "Extracting questions from the question paper…",
   map_answers: "Mapping handwritten answers to questions…",
   grade_feedback: "Scoring answers & generating AI feedback…",
   complete: "Evaluation complete",
+  failed: "Documents could not be mapped",
   error: "Evaluation failed",
 };
 
+/** Progress path for happy-path stages only */
 const STAGE_ORDER: PipelineStage[] = [
   "queued",
   "ingest_rasterize",
+  "validate_documents",
   "extract_questions",
   "map_answers",
   "grade_feedback",
@@ -93,7 +98,20 @@ export function setEvaluation(
 ): SessionRecord {
   const record = mustGet(id);
   record.evaluation = evaluation;
+  record.failure = undefined;
   record.status = buildStatus(id, "complete");
+  sessions().set(id, record);
+  return record;
+}
+
+export function setSessionFailure(
+  id: string,
+  failure: SessionFailure,
+): SessionRecord {
+  const record = mustGet(id);
+  record.failure = failure;
+  record.evaluation = undefined;
+  record.status = buildStatus(id, "failed", failure.summary);
   sessions().set(id, record);
   return record;
 }
@@ -115,13 +133,17 @@ function buildStatus(
   stage: PipelineStage,
   error?: string,
 ): SessionStatus {
-  const stageIndex = Math.max(0, STAGE_ORDER.indexOf(stage));
+  const orderIndex = STAGE_ORDER.indexOf(stage);
+  const stageIndex =
+    orderIndex >= 0 ? orderIndex : STAGE_ORDER.length - 1;
   const progress =
     stage === "error"
       ? 0
-      : stage === "complete"
+      : stage === "failed"
         ? 100
-        : Math.round((stageIndex / (STAGE_ORDER.length - 1)) * 100);
+        : stage === "complete"
+          ? 100
+          : Math.round((stageIndex / (STAGE_ORDER.length - 1)) * 100);
 
   return {
     id,
@@ -131,6 +153,7 @@ function buildStatus(
     progress,
     error,
     ready: stage === "complete",
+    terminal: stage === "complete" || stage === "failed" || stage === "error",
   };
 }
 

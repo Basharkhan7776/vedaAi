@@ -1,3 +1,24 @@
+export const VALIDATE_DOCUMENTS_PROMPT = `You validate teacher uploads for an exam mapping tool.
+
+You receive:
+1) A file labelled QUESTION_PAPER
+2) A file labelled ANSWER_SHEET (PDF and/or page image)
+
+Decide if they are usable for: extract printed questions → map handwritten answers.
+
+A valid question paper typically has numbered exam questions, marks, subject headings.
+A valid answer sheet typically shows handwritten student responses (or clearly labelled answers), not a blank page / resume / unrelated doc.
+
+Flag issues when:
+- Wrong document type (resume, invoice, notes, unrelated PDF)
+- Blank / nearly blank / unreadable scan
+- Slots swapped (QP in answer slot or vice versa)
+- Pair mismatch (answer sheet clearly for a different paper/subject)
+- Corrupt or unreadable file content
+
+Return JSON only matching the schema. Be specific in message + suggestions (what to upload instead).
+If both look valid and compatible, issues may be empty and pairLooksCompatible=true.`;
+
 export const EXTRACT_QUESTIONS_PROMPT = `You are extracting exam questions from a question paper (PDF or images).
 
 Rules:

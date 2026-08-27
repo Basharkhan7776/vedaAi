@@ -151,13 +151,19 @@ type EvaluationSession = {
 POST /api/evaluate (multipart: questionPaper, answerSheet)
   → sessionId + in-memory buffers
   → stages (poll GET /api/sessions/:id/status):
-       1. ingest_rasterize   — answer PDF/images → page PNGs
-       2. extract_questions  — Gemini on QP
-       3. map_answers        — Gemini on page images + question list (boxes + map)
-       4. grade_feedback     — scores / status / remarks (may merge with 3)
-  → GET /api/sessions/:id    — full EvaluationSession JSON
+       1. ingest_rasterize      — answer PDF/images → page PNGs
+       2. validate_documents    — Gemini contextual check (wrong PDF / mismatch)
+       3. extract_questions     — Gemini on QP (skipped if invalid)
+       4. map_answers           — Gemini on page images + question list
+       5. grade_feedback        — scores / remarks
+  → GET /api/sessions/:id
+       { ok: true, evaluation }  |  { ok: false, failure }
   → GET /api/sessions/:id/pages/:page — page image bytes
 ```
+
+**Wrong PDF / bad upload:** AI returns `SessionFailure` (per-file `issues` + `suggestions`). Client still opens `/analizer` in a **failed state** with contextual guidance and Re-upload CTA. Demo: `forceFail=1` with `demo=1`.
+
+**Contextual rule:** For a real session id, analyzer must not silently fall back to `SAMPLE_EVALUATION`. Show loading until terminal, then AI evaluation or failure.
 
 ### Prompt rules (evaluation criteria)
 
@@ -180,7 +186,14 @@ POST /api/evaluate (multipart: questionPaper, answerSheet)
 | `/` | `components/page/upload-page.tsx` | Dual upload + real progress |
 | `/analizer` | `components/page/analyzer-page.tsx` | Question list + document viewer + scores |
 
-Figma is the visual source of truth. Prefer adapting existing orange/neutral layout over redesign.
+**Figma source:** [VedaAI Hiring Assignment](https://www.figma.com/design/GEjt1rt1s7AXvkcr4t8muE/VedaAI-Hiring-Assignment) (`GEjt1rt1s7AXvkcr4t8muE`)
+
+Key frames to match:
+- `1:8744` Upload empty · `1:8797` Upload filled · `1:9959` Loading · `1:8861` Q–A mapping
+
+Chrome: cream canvas + soft grey blobs, white expanded sidebar (`VedaAI`, black **AI Teacher’s Toolkit**, **Exams** active with orange underline), top bar (search / Exams / ? / bell / theme / user), dark **Start Mapping**, analyzer split **Extracted Questions** | **Answer Sheet** with amber answer-region brackets.
+
+Reference exports (gitignored): `.figma-ref/*.png`
 
 After evaluate completes, navigate with `?session=<id>` (or sessionStorage) and fetch session payload. Keep mock `SAMPLE_EVALUATION` as **fallback** when `GEMINI_API_KEY` is missing or `?demo=1`.
 
