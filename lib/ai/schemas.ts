@@ -28,12 +28,12 @@ export const mappedAnswerSchema = z.object({
   questionNumber: z
     .string()
     .describe("Must match an extracted question number string"),
-  studentAnswer: z.string(),
-  regions: z.array(answerRegionSchema),
+  studentAnswer: z.string().default(""),
+  regions: z.array(answerRegionSchema).default([]),
   status: z.enum(["correct", "partial", "incorrect", "unanswered"]),
-  marksObtained: z.number().nonnegative(),
-  maxMarks: z.number().nonnegative(),
-  aiRemarks: z.string(),
+  marksObtained: z.number().nonnegative().default(0),
+  maxMarks: z.number().nonnegative().default(0),
+  aiRemarks: z.string().default(""),
   modelAnswer: z.string().optional(),
   confidence: z.number().min(0).max(100).optional(),
 });

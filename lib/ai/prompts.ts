@@ -7,7 +7,7 @@ You receive:
 Decide if they are usable for: extract printed questions → map handwritten answers.
 
 A valid question paper typically has numbered exam questions, marks, subject headings.
-A valid answer sheet typically shows handwritten student responses (or clearly labelled answers), not a blank page / resume / unrelated doc.
+A valid answer sheet typically shows student responses (handwritten or clearly labelled answers), not a blank page / resume / unrelated doc.
 
 Flag issues when:
 - Wrong document type (resume, invoice, notes, unrelated PDF)
@@ -16,8 +16,19 @@ Flag issues when:
 - Pair mismatch (answer sheet clearly for a different paper/subject)
 - Corrupt or unreadable file content
 
-Return JSON only matching the schema. Be specific in message + suggestions (what to upload instead).
-If both look valid and compatible, issues may be empty and pairLooksCompatible=true.`;
+Return ONLY one JSON object with EXACTLY these top-level keys:
+{
+  "questionPaper": { "isValidQuestionPaper": true, "confidence": 0-100, "notes": "..." },
+  "answerSheet": { "isValidAnswerSheet": true, "confidence": 0-100, "notes": "..." },
+  "pairLooksCompatible": true,
+  "issues": [],
+  "suggestions": []
+}
+
+issues items (if any):
+{ "file": "questionPaper"|"answerSheet"|"both", "code": "not_question_paper"|"not_answer_sheet"|"blank_or_unreadable"|"wrong_subject_or_mismatch"|"corrupted_or_unreadable"|"other", "message": "...", "suggestions": ["..."] }
+
+Be specific in message + suggestions. If both valid and compatible, issues and suggestions may be empty arrays.`;
 
 export const EXTRACT_QUESTIONS_PROMPT = `You are extracting exam questions from a question paper (PDF or images).
 
@@ -30,9 +41,16 @@ Rules:
 6. Ignore instructions/cover pages that are not questions.
 7. Return JSON only matching the schema.`;
 
-export function buildMapAndGradePrompt(questionsJson: string): string {
-  return `You are mapping a student's handwritten answer sheet to exam questions and grading.
+export function buildMapAndGradePrompt(
+  questionsJson: string,
+  groundingNotes?: string,
+): string {
+  const groundingBlock = groundingNotes
+    ? `\n${groundingNotes}\n`
+    : "";
 
+  return `You are mapping a student's handwritten answer sheet to exam questions and grading.
+${groundingBlock}
 Questions (JSON):
 ${questionsJson}
 
@@ -46,7 +64,7 @@ Tasks:
 5. If handwriting exists that matches no question, put it in unmappedAnswers with box_2d.
 6. Answers may span multiple pages — return multiple regions.
 7. For each region, box_2d MUST be [ymin, xmin, ymax, xmax] integers normalized to 0-1000 on THAT page image.
-8. Grade when possible: correct | partial | incorrect | unanswered. Use maxMarks from the question list when present.
+8. Grade when possible: correct | partial | incorrect | unanswered. Use maxMarks from the question list when present. Prefer the grounded research brief for expected points.
 9. Write concise aiRemarks (per question). Optionally overallFeedback.
 10. Return JSON only matching the schema. Do not invent boxes for unanswered questions.`;
 }

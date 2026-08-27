@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import localFont from "next/font/local";
+import { QueryProvider } from "@/components/providers/query-provider";
 import "./globals.css";
 
 const bricolageGrotesque = localFont({
@@ -21,7 +22,7 @@ export default function RootLayout({
   return (
     <html lang="en" className={`h-full antialiased ${bricolageGrotesque.variable}`}>
       <body className={`${bricolageGrotesque.className} min-h-full flex flex-col font-sans bg-[#FBFBFA]`}>
-        {children}
+        <QueryProvider>{children}</QueryProvider>
       </body>
     </html>
   );

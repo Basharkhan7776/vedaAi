@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useRef } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
@@ -14,15 +14,40 @@ import {
   CircleHelp,
   Bell,
   ChevronDown,
-  Sparkles
+  Sparkles,
+  AlertCircle,
 } from "lucide-react";
 import { SidebarNav } from "./sidebar-nav";
+import { useSessionStatus, useStartEvaluation } from "@/lib/api/hooks";
 
-// Red PDF Document Badge Icon
+type UploadMeta = {
+  name: string;
+  size: string;
+  file: File | null;
+  demo?: boolean;
+};
+
+function formatSize(bytes: number) {
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)}KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+}
+
+const STAGE_TO_STEP: Record<string, number> = {
+  queued: 0,
+  ingest_rasterize: 0,
+  validate_documents: 1,
+  extract_questions: 1,
+  thinking_loop: 2,
+  map_answers: 2,
+  grade_feedback: 3,
+  complete: 3,
+  failed: 3,
+  error: 3,
+};
+
 function PdfIconBadge() {
   return (
     <div className="w-9 h-11 bg-[#E84338] rounded-lg relative flex flex-col justify-end p-1 shadow-2xs flex-shrink-0 select-none">
-      {/* Folded top-right corner */}
       <div className="absolute top-0 right-0 w-2.5 h-2.5 bg-[#C83025] rounded-bl-sm" />
       <span className="text-[9px] font-black text-white tracking-tighter text-center leading-none mb-1">
         PDF
@@ -36,86 +61,154 @@ export function UploadPage() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
-  // Hidden File Inputs
   const qpInputRef = useRef<HTMLInputElement>(null);
   const asInputRef = useRef<HTMLInputElement>(null);
 
-  // File Upload States
-  const [questionPaper, setQuestionPaper] = useState<{
-    name: string;
-    size: string;
-    pages: number;
-  } | null>(null);
+  const [questionPaper, setQuestionPaper] = useState<UploadMeta | null>(null);
+  const [answerSheets, setAnswerSheets] = useState<UploadMeta | null>(null);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [evalError, setEvalError] = useState<string | null>(null);
 
-  const [answerSheets, setAnswerSheets] = useState<{
-    name: string;
-    size: string;
-    studentCount: number;
-    pages: number;
-  } | null>(null);
+  const startMutation = useStartEvaluation();
+  const statusQuery = useSessionStatus(activeSessionId, {
+    enabled: Boolean(activeSessionId),
+  });
 
-  // In-Page Processing / Evaluation State
-  const [isEvaluating, setIsEvaluating] = useState(false);
-  const [evaluationStep, setEvaluationStep] = useState(0);
+  const isEvaluating = Boolean(activeSessionId) && !statusQuery.data?.terminal;
+  const evaluationStep = STAGE_TO_STEP[statusQuery.data?.stage ?? "queued"] ?? 0;
+  const statusLabel =
+    statusQuery.data?.stageLabel ||
+    "Please wait, while we evaluate the answer sheets...";
 
   const isReady = Boolean(questionPaper && answerSheets);
 
-  const evaluationSteps = [
-    "Ingesting & OCR parsing document sheets...",
-    "Transcribing handwritten mathematical formulas & steps...",
-    "Aligning questions with evaluation rubric criteria...",
-    "Generating score breakdowns & spatial bounding box annotations...",
-  ];
+  const evaluationSteps = useMemo(
+    () => [
+      "Ingesting & rendering answer sheet pages…",
+      "Validating documents & extracting questions…",
+      "Agent thinking + Google Search grounding…",
+      "Mapping answers & generating AI feedback…",
+    ],
+    [],
+  );
 
-  // Pre-load sample files matching Figma reference screenshots
-  const handleLoadSampleData = () => {
+  // When Gemini pipeline finishes (success or failed), open analyzer with session
+  useEffect(() => {
+    const status = statusQuery.data;
+    if (!activeSessionId || !status?.terminal) return;
+    sessionStorage.setItem("veda-session-id", activeSessionId);
+    router.push(`/analizer?session=${activeSessionId}`);
+  }, [activeSessionId, statusQuery.data, router]);
+
+  const handleLoadSampleData = async () => {
+    setEvalError(null);
+    try {
+      const [qpRes, asRes] = await Promise.all([
+        fetch("/fixtures/question-paper.pdf"),
+        fetch("/fixtures/answer-sheet.pdf"),
+      ]);
+      // Prefer repo fixtures via API form if public copy missing — fall back to demo flag
+      if (qpRes.ok && asRes.ok) {
+        const qpBlob = await qpRes.blob();
+        const asBlob = await asRes.blob();
+        const qpFile = new File([qpBlob], "question-paper.pdf", {
+          type: "application/pdf",
+        });
+        const asFile = new File([asBlob], "answer-sheet.pdf", {
+          type: "application/pdf",
+        });
+        setQuestionPaper({
+          name: qpFile.name,
+          size: formatSize(qpFile.size),
+          file: qpFile,
+        });
+        setAnswerSheets({
+          name: asFile.name,
+          size: formatSize(asFile.size),
+          file: asFile,
+        });
+        return;
+      }
+    } catch {
+      /* demo mode below */
+    }
     setQuestionPaper({
-      name: "Class_10_maths_unit_test.pdf",
+      name: "Class_10_science_unit_test.pdf",
       size: "2MB",
-      pages: 2,
+      file: null,
+      demo: true,
     });
     setAnswerSheets({
-      name: "student_1_answer_sheet",
+      name: "student_1_answer_sheet.pdf",
       size: "8MB",
-      studentCount: 1,
-      pages: 6,
+      file: null,
+      demo: true,
     });
   };
 
-  const handleStartEvaluation = () => {
-    if (!isReady) return;
+  const handleStartEvaluation = async () => {
+    setEvalError(null);
+    if (!questionPaper || !answerSheets) return;
 
-    setIsEvaluating(true);
-    setEvaluationStep(0);
+    const useDemo =
+      questionPaper.demo ||
+      answerSheets.demo ||
+      !questionPaper.file ||
+      !answerSheets.file;
 
-    setTimeout(() => setEvaluationStep(1), 750);
-    setTimeout(() => setEvaluationStep(2), 1500);
-    setTimeout(() => setEvaluationStep(3), 2250);
-    setTimeout(() => {
-      router.push("/analizer");
-    }, 3000);
-  };
+    try {
+      let qpFile = questionPaper.file;
+      let asFile = answerSheets.file;
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>, type: "qp" | "as") => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+      if (useDemo) {
+        // Tiny placeholder PDFs — server demo path or force real if files exist
+        qpFile =
+          qpFile ||
+          new File([new Uint8Array([37, 80, 68, 70])], "demo-qp.pdf", {
+            type: "application/pdf",
+          });
+        asFile =
+          asFile ||
+          new File([new Uint8Array([37, 80, 68, 70])], "demo-ans.pdf", {
+            type: "application/pdf",
+          });
+      }
 
-    const sizeStr = `${(file.size / (1024 * 1024)).toFixed(1)}MB`;
-    if (type === "qp") {
-      setQuestionPaper({
-        name: file.name,
-        size: sizeStr,
-        pages: 2,
+      const result = await startMutation.mutateAsync({
+        questionPaper: qpFile!,
+        answerSheet: asFile!,
+        demo: useDemo && !questionPaper.file,
       });
-    } else {
-      setAnswerSheets({
-        name: file.name,
-        size: sizeStr,
-        studentCount: 1,
-        pages: 6,
-      });
+
+      if (!result.sessionId) {
+        throw new Error(result.error || "No session returned");
+      }
+      setActiveSessionId(result.sessionId);
+    } catch (err) {
+      setEvalError(err instanceof Error ? err.message : "Failed to start evaluation");
+      setActiveSessionId(null);
     }
   };
+
+  const handleFileChange = (
+    e: React.ChangeEvent<HTMLInputElement>,
+    type: "qp" | "as",
+  ) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const meta: UploadMeta = {
+      name: file.name,
+      size: formatSize(file.size),
+      file,
+      demo: false,
+    };
+    if (type === "qp") setQuestionPaper(meta);
+    else setAnswerSheets(meta);
+  };
+
+  const showEvaluating =
+    startMutation.isPending ||
+    (Boolean(activeSessionId) && !statusQuery.data?.terminal);
 
   return (
     <div className="flex h-screen w-full bg-[#EBEBE8] p-2 md:p-3.5 gap-3 overflow-hidden text-neutral-900 font-sans">
@@ -169,9 +262,9 @@ export function UploadPage() {
               <Link
                 href="/"
                 onClick={(e) => {
-                  if (isEvaluating) {
+                  if (showEvaluating) {
                     e.preventDefault();
-                    setIsEvaluating(false);
+                    setActiveSessionId(null);
                   }
                 }}
                 className="text-neutral-900 hover:text-neutral-600 transition-colors p-1 -ml-1"
@@ -220,9 +313,9 @@ export function UploadPage() {
               <Link
                 href="/"
                 onClick={(e) => {
-                  if (isEvaluating) {
+                  if (showEvaluating) {
                     e.preventDefault();
-                    setIsEvaluating(false);
+                    setActiveSessionId(null);
                   }
                 }}
                 className="w-9 h-9 rounded-full bg-white hover:bg-neutral-50 flex items-center justify-center text-neutral-800 transition-colors shadow-2xs border border-neutral-200/80 cursor-pointer"
@@ -283,12 +376,11 @@ export function UploadPage() {
         </header>
 
         {/* Conditional Rendering: In-Page Loading Screen VS Upload Screen */}
-        {isEvaluating ? (
+        {showEvaluating ? (
           /* ========================================================= */
           /* IN-PAGE LOADING SCREEN (Figma Frame 1:9959 with /loading-icon.png) */
           /* ========================================================= */
           <main className="flex-1 max-w-2xl w-full mx-auto p-6 md:p-12 flex flex-col items-center justify-center text-center animate-in fade-in zoom-in-95 duration-300">
-            {/* Animated Loading Icon */}
             <div className="relative mb-6 w-28 h-28 sm:w-36 sm:h-36 flex items-center justify-center select-none">
               <div className="absolute inset-0 rounded-full bg-orange-500/15 animate-ping opacity-60" />
               <Image
@@ -301,23 +393,26 @@ export function UploadPage() {
               />
             </div>
 
-            {/* Title & Subtitle */}
             <h2 className="text-2xl sm:text-3xl font-extrabold text-neutral-900 tracking-tight mb-2">
-              Please wait, while we evaluate the answer sheets...
+              Analyzing your sheets...
             </h2>
             <p className="text-sm sm:text-base text-neutral-500 max-w-md mx-auto mb-8 font-normal">
-              This might take a few moments.
+              {statusLabel || "This might take a few moments."}
             </p>
 
-            {/* Progress Bar */}
             <div className="w-full max-w-md bg-neutral-100 rounded-full h-2 overflow-hidden mb-4 shadow-inner">
               <div
                 className="bg-gradient-to-r from-[#FF5722] to-orange-400 h-full transition-all duration-700 rounded-full"
-                style={{ width: `${((evaluationStep + 1) / evaluationSteps.length) * 100}%` }}
+                style={{
+                  width: `${Math.max(
+                    8,
+                    statusQuery.data?.progress ??
+                      ((evaluationStep + 1) / evaluationSteps.length) * 100,
+                  )}%`,
+                }}
               />
             </div>
 
-            {/* Current Step Description */}
             <p className="text-xs text-neutral-400 font-medium tracking-tight">
               {evaluationSteps[evaluationStep]}
             </p>
@@ -362,9 +457,7 @@ export function UploadPage() {
               {/* Card 1: Upload Question Paper */}
               <div
                 onClick={() => {
-                  if (!questionPaper) {
-                    handleLoadSampleData();
-                  }
+                  if (!questionPaper) qpInputRef.current?.click();
                 }}
                 className="border-2 border-dashed border-neutral-300 hover:border-neutral-400 bg-white rounded-2xl sm:rounded-3xl p-6 sm:p-8 text-center flex items-center justify-center transition-all cursor-pointer min-h-[170px] sm:min-h-[200px]"
               >
@@ -378,7 +471,8 @@ export function UploadPage() {
                         {questionPaper.name}
                       </p>
                       <p className="text-xs text-neutral-500 font-normal mt-0.5">
-                        {questionPaper.size} • {questionPaper.pages} Pages
+                        {questionPaper.size}
+                        {questionPaper.demo ? " • Sample" : ""}
                       </p>
                     </div>
 
@@ -415,9 +509,7 @@ export function UploadPage() {
               {/* Card 2: Upload Answer Sheet */}
               <div
                 onClick={() => {
-                  if (!answerSheets) {
-                    handleLoadSampleData();
-                  }
+                  if (!answerSheets) asInputRef.current?.click();
                 }}
                 className="border-2 border-dashed border-neutral-300 hover:border-neutral-400 bg-white rounded-2xl sm:rounded-3xl p-6 sm:p-8 text-center flex items-center justify-center transition-all cursor-pointer min-h-[170px] sm:min-h-[200px]"
               >
@@ -431,7 +523,8 @@ export function UploadPage() {
                         {answerSheets.name}
                       </p>
                       <p className="text-xs text-neutral-500 font-normal mt-0.5">
-                        {answerSheets.size} • {answerSheets.pages} Pages
+                        {answerSheets.size}
+                        {answerSheets.demo ? " • Sample" : ""}
                       </p>
                     </div>
 
@@ -464,25 +557,45 @@ export function UploadPage() {
               </div>
             </div>
 
+            {evalError && (
+              <div className="max-w-4xl w-full mx-auto mt-3 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+                <p>{evalError}</p>
+              </div>
+            )}
+
             {/* 4. Action Button ("Start Mapping ->") */}
             <div className="flex flex-col items-center justify-center mt-4 sm:mt-6 space-y-2 sm:space-y-2.5 pb-4">
               <button
                 type="button"
                 onClick={handleStartEvaluation}
-                disabled={!isReady}
+                disabled={!isReady || startMutation.isPending}
                 className={`w-full sm:w-auto px-9 py-3 sm:py-3.5 rounded-full text-sm sm:text-base font-medium transition-all flex items-center justify-center gap-2 ${
                   isReady
                     ? "bg-neutral-900 hover:bg-[#FF5722] text-white shadow-md cursor-pointer hover:scale-105"
                     : "bg-[#C5C8CD] text-white cursor-not-allowed opacity-90"
                 }`}
               >
-                <span>Start Mapping</span>
+                <span>
+                  {startMutation.isPending ? "Starting…" : "Start Mapping"}
+                </span>
                 <ArrowRight className="w-4 h-4 stroke-[2.2]" />
               </button>
 
               <p className="text-xs sm:text-sm text-neutral-500 font-normal text-center max-w-md px-2">
-                Once both files are uploaded, you'll able to map answers with questions
+                Once both files are uploaded, you&apos;ll able to map answers with
+                questions
               </p>
+
+              {!isReady && (
+                <button
+                  type="button"
+                  onClick={handleLoadSampleData}
+                  className="text-xs font-semibold text-[#FF5722] underline underline-offset-2"
+                >
+                  Load sample files
+                </button>
+              )}
             </div>
           </main>
         )}

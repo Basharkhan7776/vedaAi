@@ -87,6 +87,7 @@ async function runDemoPipeline(
     "ingest_rasterize",
     "validate_documents",
     "extract_questions",
+    "thinking_loop",
     "map_answers",
     "grade_feedback",
   ] as const;

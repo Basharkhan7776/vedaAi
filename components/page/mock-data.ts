@@ -65,6 +65,22 @@ export interface UnmappedAnswer {
   regions: AnswerRegion[];
 }
 
+export interface ThinkingStep {
+  id: string;
+  label: string;
+  detail: string;
+  sources?: string[];
+}
+
+export interface GroundingBrief {
+  subjectGuess: string;
+  researchQueries: string[];
+  rubricNotes: string;
+  conceptNotes: string;
+  thinkingSteps: ThinkingStep[];
+  usedGoogleSearch: boolean;
+}
+
 export interface EvaluationSession {
   id: string;
   title: string;
@@ -78,6 +94,7 @@ export interface EvaluationSession {
   percentage: number;
   gradeBadge: string;
   totalPages: number;
+  grounding?: GroundingBrief;
   questions: QuestionEvaluation[];
   unmappedAnswers?: UnmappedAnswer[];
 }

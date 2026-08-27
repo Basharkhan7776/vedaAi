@@ -35,6 +35,7 @@ A teacher should upload a question paper and answer sheet and quickly understand
 | Decision | Choice | Why |
 |----------|--------|-----|
 | Framework | **Next.js** App Router (this repo) | Recommended by assignment; UI already started |
+| Client data | **Axios** + **TanStack Query** (`lib/api/*`, `QueryProvider`) | Upload mutation + status/session polling; Gemini stays server-side |
 | AI | **Google Gemini only** (`@google/genai`) | Native PDF + image input; structured JSON; free tier; trained `box_2d` |
 | File host for model | **None required** | Inline base64 or Gemini Files API (Google temp ~48h). No S3/Cloudinary |
 | Highlights | **CSS absolute % overlays** on rasterized page `<img>` | Matches existing `DocumentViewer`; easy click sync; no Canvas |
@@ -154,8 +155,9 @@ POST /api/evaluate (multipart: questionPaper, answerSheet)
        1. ingest_rasterize      — answer PDF/images → page PNGs
        2. validate_documents    — Gemini contextual check (wrong PDF / mismatch)
        3. extract_questions     — Gemini on QP (skipped if invalid)
-       4. map_answers           — Gemini on page images + question list
-       5. grade_feedback        — scores / remarks
+       4. thinking_loop         — agent plan → Google Search grounding → synthesize grader brief
+       5. map_answers           — Gemini on page images + question list + grounded notes
+       6. grade_feedback        — scores / remarks
   → GET /api/sessions/:id
        { ok: true, evaluation }  |  { ok: false, failure }
   → GET /api/sessions/:id/pages/:page — page image bytes

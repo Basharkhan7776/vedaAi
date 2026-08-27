@@ -3,6 +3,10 @@ import {
   mapAnswersAndGrade,
   validateDocuments,
 } from "@/lib/ai/gemini";
+import {
+  formatGroundingForPrompt,
+  runGroundedThinkingLoop,
+} from "@/lib/ai/thinking-loop";
 import { box2dToPct, emptyBox } from "@/lib/geometry/box";
 import { rasterizeAnswerSheet } from "@/lib/pdf/rasterize";
 import {
@@ -15,6 +19,7 @@ import {
 import type {
   AnswerRegion,
   EvaluationSession,
+  GroundingBrief,
   MappedQuestion,
   SessionFailure,
   UnmappedAnswer,
@@ -93,8 +98,23 @@ export async function runEvaluationPipeline(sessionId: string): Promise<void> {
     setSessionStage(sessionId, "extract_questions");
     const extracted = await extractQuestions(session.questionPaper);
 
+    setSessionStage(sessionId, "thinking_loop");
+    let grounding: GroundingBrief | undefined;
+    try {
+      grounding = await runGroundedThinkingLoop({ extracted });
+    } catch (thinkErr) {
+      console.warn(
+        "[pipeline] thinking loop failed; continuing without grounding",
+        thinkErr,
+      );
+    }
+
     setSessionStage(sessionId, "map_answers");
-    const mapped = await mapAnswersAndGrade(pages, extracted.questions);
+    const mapped = await mapAnswersAndGrade(
+      pages,
+      extracted.questions,
+      grounding ? formatGroundingForPrompt(grounding) : undefined,
+    );
 
     setSessionStage(sessionId, "grade_feedback");
     const evaluation = buildEvaluationSession({
@@ -103,6 +123,7 @@ export async function runEvaluationPipeline(sessionId: string): Promise<void> {
       mapped,
       totalPages: pages.length,
       overallFeedback: mapped.overallFeedback,
+      grounding,
     });
 
     setEvaluation(sessionId, evaluation);
@@ -197,8 +218,9 @@ function buildEvaluationSession(args: {
   mapped: Awaited<ReturnType<typeof mapAnswersAndGrade>>;
   totalPages: number;
   overallFeedback?: string;
+  grounding?: GroundingBrief;
 }): EvaluationSession {
-  const { sessionId, extracted, mapped, totalPages } = args;
+  const { sessionId, extracted, mapped, totalPages, grounding } = args;
   const byNumber = new Map(
     mapped.answers.map((a) => [normalizeNumber(a.questionNumber), a]),
   );
@@ -244,8 +266,12 @@ function buildEvaluationSession(args: {
     }),
   );
 
-  const totalMarks = questions.reduce((s, q) => s + q.marksObtained, 0);
-  const maxMarks = questions.reduce((s, q) => s + q.maxMarks, 0) || 1;
+  // If Gemini omitted box_2d (common on plain text PDFs), synthesize stacked
+  // regions so the answer-sheet UI can still highlight mapped answers.
+  const withBoxes = applyFallbackRegions(questions);
+
+  const totalMarks = withBoxes.reduce((s, q) => s + q.marksObtained, 0);
+  const maxMarks = withBoxes.reduce((s, q) => s + q.maxMarks, 0) || 1;
   const percentage = Number(((totalMarks / maxMarks) * 100).toFixed(1));
 
   return {
@@ -265,9 +291,45 @@ function buildEvaluationSession(args: {
     percentage,
     gradeBadge: gradeBadge(percentage),
     totalPages,
-    questions,
+    questions: withBoxes,
     unmappedAnswers,
+    grounding,
   };
+}
+
+function applyFallbackRegions(questions: MappedQuestion[]): MappedQuestion[] {
+  const needing = questions.filter(
+    (q) =>
+      q.status !== "unanswered" &&
+      (q.regions.length === 0 ||
+        (!q.boundingBox.width && !q.boundingBox.height)),
+  );
+  if (needing.length === 0) return questions;
+
+  const slot = Math.max(10, Math.floor(80 / needing.length));
+  let cursor = 8;
+
+  return questions.map((q) => {
+    if (
+      q.status === "unanswered" ||
+      (q.regions.length > 0 && (q.boundingBox.width || q.boundingBox.height))
+    ) {
+      return q;
+    }
+    const box = {
+      x: 6,
+      y: cursor,
+      width: 88,
+      height: Math.min(slot - 1, 18),
+    };
+    cursor += slot;
+    return {
+      ...q,
+      page: q.page || 1,
+      boundingBox: box,
+      regions: [{ page: q.page || 1, box }],
+    };
+  });
 }
 
 function toRegion(r: {

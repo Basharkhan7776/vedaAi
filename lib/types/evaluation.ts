@@ -55,6 +55,22 @@ export type UnmappedAnswer = {
   regions: AnswerRegion[];
 };
 
+export type ThinkingStep = {
+  id: string;
+  label: string;
+  detail: string;
+  sources?: string[];
+};
+
+export type GroundingBrief = {
+  subjectGuess: string;
+  researchQueries: string[];
+  rubricNotes: string;
+  conceptNotes: string;
+  thinkingSteps: ThinkingStep[];
+  usedGoogleSearch: boolean;
+};
+
 export type EvaluationSession = {
   id: string;
   title: string;
@@ -70,6 +86,7 @@ export type EvaluationSession = {
   totalPages: number;
   questions: MappedQuestion[];
   unmappedAnswers: UnmappedAnswer[];
+  grounding?: GroundingBrief;
 };
 
 export type DocumentIssueCode =
@@ -99,6 +116,7 @@ export type PipelineStage =
   | "ingest_rasterize"
   | "validate_documents"
   | "extract_questions"
+  | "thinking_loop"
   | "map_answers"
   | "grade_feedback"
   | "complete"
