@@ -7,6 +7,83 @@ import type { StoredFile, StoredPage } from "@/lib/types/evaluation";
 
 const execAsync = promisify(exec);
 
+// Polyfill DOM globals required by pdfjs-dist in serverless Node environments (Vercel)
+function ensureDomPolyfills() {
+  const g = globalThis as unknown as Record<string, unknown>;
+
+  if (typeof g.DOMMatrix === "undefined") {
+    class DOMMatrixPolyfill {
+      a = 1; b = 0; c = 0; d = 1; e = 0; f = 0;
+      m11 = 1; m12 = 0; m13 = 0; m14 = 0;
+      m21 = 0; m22 = 1; m23 = 0; m24 = 0;
+      m31 = 0; m32 = 0; m33 = 1; m34 = 0;
+      m41 = 0; m42 = 0; m43 = 0; m44 = 1;
+      is2D = true;
+      isIdentity = true;
+
+      constructor(init?: number[] | string) {
+        if (Array.isArray(init) && init.length >= 6) {
+          this.a = this.m11 = init[0];
+          this.b = this.m12 = init[1];
+          this.c = this.m21 = init[2];
+          this.d = this.m22 = init[3];
+          this.e = this.m41 = init[4];
+          this.f = this.m42 = init[5];
+        }
+      }
+      multiply() { return this; }
+      translate() { return this; }
+      scale() { return this; }
+      rotate() { return this; }
+      inverse() { return this; }
+      transformPoint(p: unknown) { return p; }
+      toFloat32Array() {
+        return new Float32Array([
+          this.m11, this.m12, this.m13, this.m14,
+          this.m21, this.m22, this.m23, this.m24,
+          this.m31, this.m32, this.m33, this.m34,
+          this.m41, this.m42, this.m43, this.m44,
+        ]);
+      }
+      toFloat64Array() {
+        return new Float64Array([
+          this.m11, this.m12, this.m13, this.m14,
+          this.m21, this.m22, this.m23, this.m24,
+          this.m31, this.m32, this.m33, this.m34,
+          this.m41, this.m42, this.m43, this.m44,
+        ]);
+      }
+    }
+    g.DOMMatrix = DOMMatrixPolyfill;
+  }
+
+  if (typeof g.DOMPoint === "undefined") {
+    class DOMPointPolyfill {
+      x: number; y: number; z: number; w: number;
+      constructor(x = 0, y = 0, z = 0, w = 1) {
+        this.x = x; this.y = y; this.z = z; this.w = w;
+      }
+    }
+    g.DOMPoint = DOMPointPolyfill;
+  }
+
+  if (typeof g.DOMRect === "undefined") {
+    class DOMRectPolyfill {
+      x: number; y: number; width: number; height: number;
+      top: number; right: number; bottom: number; left: number;
+      constructor(x = 0, y = 0, w = 0, h = 0) {
+        this.x = this.left = x;
+        this.y = this.top = y;
+        this.width = w;
+        this.height = h;
+        this.right = x + w;
+        this.bottom = y + h;
+      }
+    }
+    g.DOMRect = DOMRectPolyfill;
+  }
+}
+
 const IMAGE_TYPES = new Set([
   "image/png",
   "image/jpeg",
@@ -45,18 +122,18 @@ export async function rasterizeAnswerSheet(
 }
 
 async function rasterizePdf(bytes: Buffer, fileName = "answer.pdf"): Promise<StoredPage[]> {
-  // Strategy 1: High-speed native poppler `pdftoppm`
+  // Ensure DOM polyfills are active before importing pdf-to-img / pdfjs-dist
+  ensureDomPolyfills();
+
+  // Strategy 1: High-speed native poppler `pdftoppm` (if installed on host)
   try {
     const pages = await rasterizeWithPdftoppm(bytes);
     if (pages.length > 0) return pages;
   } catch (popplerErr) {
-    console.warn(
-      "[rasterize] pdftoppm failed or not installed, falling back to pdf-to-img:",
-      popplerErr instanceof Error ? popplerErr.message : popplerErr,
-    );
+    // Normal in serverless environments without C++ poppler binaries
   }
 
-  // Strategy 2: Node pdf-to-img library
+  // Strategy 2: Node pdf-to-img library with DOMMatrix polyfill
   try {
     const { pdf } = await import("pdf-to-img");
     const document = await pdf(bytes, { scale: 1.5 });
