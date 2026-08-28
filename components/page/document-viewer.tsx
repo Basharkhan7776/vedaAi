@@ -2,11 +2,11 @@
 
 import React, { useMemo, useState } from "react";
 import { ChevronLeft, ChevronRight, FileText } from "lucide-react";
-import { QuestionEvaluation } from "./mock-data";
+import type { MappedQuestion } from "@/lib/types/evaluation";
 import { sessionPageUrl } from "@/lib/api/evaluation";
 
 interface DocumentViewerProps {
-  questions: QuestionEvaluation[];
+  questions: MappedQuestion[];
   selectedQuestionId: string;
   onSelectQuestion: (questionId: string) => void;
   currentPage: number;
@@ -16,7 +16,7 @@ interface DocumentViewerProps {
   pdfUrl?: string;
 }
 
-function regionsForQuestion(q: QuestionEvaluation) {
+function regionsForQuestion(q: MappedQuestion) {
   if (q.regions && q.regions.length > 0) return q.regions;
   return [{ page: q.page, box: q.boundingBox }];
 }
@@ -126,6 +126,7 @@ export function DocumentViewer({
                   if (!box?.width || !box?.height) return null;
                   const active =
                     selectedQuestionId === q.id || hoveredId === q.id;
+                  const label = q.subNumber || (q.number ? `Q${q.number}` : `Q${q.questionNumber}`);
                   return (
                     <div
                       key={`${q.id}-${idx}`}
@@ -149,8 +150,8 @@ export function DocumentViewer({
                       <span className="absolute -bottom-0.5 -left-0.5 w-3 h-3 border-b-2 border-l-2 border-[#FF5722]" />
                       <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 border-b-2 border-r-2 border-[#FF5722]" />
                       {active && (
-                        <span className="absolute -top-6 left-0 text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#FF5722] text-white shadow-sm">
-                          Q{q.number ?? q.questionNumber} · Answer Region
+                        <span className="absolute -top-6 left-0 text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#FF5722] text-white shadow-sm whitespace-nowrap">
+                          {label} · Answer Region
                         </span>
                       )}
                     </div>

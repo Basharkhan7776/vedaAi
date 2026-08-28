@@ -59,6 +59,10 @@ export type MappedQuestion = {
   page: number;
   boundingBox: BoxPct;
   section?: string | null;
+  sectionTitle?: string | null;
+  parentQuestionNumber?: string | null;
+  subPart?: string | null;
+  subNumber?: string | null;
   isOptional?: boolean;
   choiceGroup?: string | null;
 };

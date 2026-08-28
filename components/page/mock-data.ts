@@ -1,105 +1,29 @@
-export interface BoundingBox {
-  id: string;
-  questionId: string;
-  page: number;
-  x: number; // percentage from left
-  y: number; // percentage from top
-  width: number; // percentage width
-  height: number; // percentage height
-  label: string;
-  score: number;
-  maxScore: number;
-  status: "correct" | "partial" | "incorrect";
-  feedback: string;
-}
+import type {
+  EvaluationSession as CanonicalEvaluationSession,
+  MappedQuestion,
+  QuestionStatus,
+  RubricStep,
+  AnswerRegion,
+  UnmappedAnswer,
+  GroundingBrief,
+  ThinkingStep,
+  SectionInfo,
+} from "@/lib/types/evaluation";
 
-export interface RubricStep {
-  step: number;
-  description: string;
-  marks: number;
-  awarded: number;
-  status: "full" | "partial" | "none";
-  note?: string;
-}
+export type {
+  CanonicalEvaluationSession as EvaluationSession,
+  MappedQuestion as QuestionEvaluation,
+  MappedQuestion,
+  QuestionStatus,
+  RubricStep,
+  AnswerRegion,
+  UnmappedAnswer,
+  GroundingBrief,
+  ThinkingStep,
+  SectionInfo,
+};
 
-export interface AnswerRegion {
-  page: number;
-  box: {
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-  };
-}
-
-export interface QuestionEvaluation {
-  id: string;
-  number?: string;
-  questionNumber: number;
-  subNumber?: string; // e.g. "a." or "b"
-  title: string;
-  questionText: string;
-  maxMarks: number;
-  marksObtained: number;
-  status: "correct" | "partial" | "incorrect" | "unanswered";
-  page: number;
-  confidence: number;
-  modelAnswer?: string;
-  studentAnswer?: string;
-  studentAnswerTranscription?: string;
-  rubric?: RubricStep[];
-  aiRemarks: string;
-  teacherRemarks?: string;
-  regions?: AnswerRegion[];
-  boundingBox: {
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-  };
-}
-
-export interface UnmappedAnswer {
-  id: string;
-  transcription: string;
-  regions: AnswerRegion[];
-}
-
-export interface ThinkingStep {
-  id: string;
-  label: string;
-  detail: string;
-  sources?: string[];
-}
-
-export interface GroundingBrief {
-  subjectGuess: string;
-  researchQueries: string[];
-  rubricNotes: string;
-  conceptNotes: string;
-  thinkingSteps: ThinkingStep[];
-  usedGoogleSearch: boolean;
-}
-
-export interface EvaluationSession {
-  id: string;
-  title: string;
-  subject: string;
-  grade: string;
-  studentName: string;
-  rollNumber: string;
-  date: string;
-  totalMarks: number;
-  maxMarks: number;
-  percentage: number;
-  gradeBadge: string;
-  totalPages: number;
-  grounding?: GroundingBrief;
-  questions: QuestionEvaluation[];
-  unmappedAnswers?: UnmappedAnswer[];
-}
-
-export const SAMPLE_EVALUATION: EvaluationSession = {
+export const SAMPLE_EVALUATION: CanonicalEvaluationSession = {
   id: "session-veda-biology",
   title: "Class 10 - Biology & Life Sciences Unit Test",
   subject: "Biology & Life Sciences",
@@ -112,10 +36,50 @@ export const SAMPLE_EVALUATION: EvaluationSession = {
   percentage: 86.7,
   gradeBadge: "A (Distinction)",
   totalPages: 4,
+  totalPaperMarks: 45,
+  duration: "1 ½ hrs",
+  sections: [
+    {
+      name: "Section A",
+      title: "Multiple Choice Questions",
+      questionRange: "1-5",
+      marksPerQuestion: 2,
+      totalMarks: 10,
+      isCompulsory: true,
+      instructions: "All questions are compulsory",
+    },
+    {
+      name: "Section B",
+      title: "Short Answer Questions",
+      questionRange: "6-10",
+      marksPerQuestion: 3,
+      totalMarks: 15,
+      isCompulsory: true,
+      instructions: "Answer in 30-50 words",
+    },
+    {
+      name: "Section C",
+      title: "Long Answer & Multi-Part",
+      questionRange: "11-13",
+      marksPerQuestion: 5,
+      totalMarks: 20,
+      isCompulsory: true,
+      instructions: "Answer with labelled steps/diagrams",
+    },
+  ],
+  generalInstructions: [
+    "All questions are compulsory.",
+    "Section A carries 2 marks each.",
+    "Section B carries 3 marks each.",
+    "Section C carries 5 marks each with sub-parts.",
+  ],
   questions: [
     {
       id: "q1",
+      number: "1",
       questionNumber: 1,
+      parentQuestionNumber: "1",
+      section: "Section A",
       title: "Circulatory Vessels",
       questionText: "Which blood vessel carries blood away from the heart?",
       maxMarks: 2,
@@ -123,12 +87,20 @@ export const SAMPLE_EVALUATION: EvaluationSession = {
       status: "correct",
       page: 1,
       confidence: 0.98,
+      studentAnswer: "Artery / Aorta",
+      studentAnswerTranscription: "Artery / Aorta",
+      modelAnswer: "Arteries carry blood away from the heart.",
       aiRemarks: "Correct! Identified artery/aorta as the vessel carrying oxygenated blood away from the heart.",
-      boundingBox: { x: 5, y: 5, width: 90, height: 18 }
+      rubric: [],
+      regions: [{ page: 1, box: { x: 5, y: 5, width: 90, height: 18 } }],
+      boundingBox: { x: 5, y: 5, width: 90, height: 18 },
     },
     {
       id: "q2",
+      number: "2",
       questionNumber: 2,
+      parentQuestionNumber: "2",
+      section: "Section A",
       title: "Photosynthesis Organelle",
       questionText: "Which of the following organelles is primarily involved in photosynthesis?",
       maxMarks: 2,
@@ -136,12 +108,20 @@ export const SAMPLE_EVALUATION: EvaluationSession = {
       status: "correct",
       page: 1,
       confidence: 0.99,
+      studentAnswer: "Chloroplast",
+      studentAnswerTranscription: "Chloroplast",
+      modelAnswer: "Chloroplast is the organelle where photosynthesis takes place.",
       aiRemarks: "Excellent work! You correctly identified the chloroplast as the organelle responsible for photosynthesis. Keep it up!",
-      boundingBox: { x: 5, y: 25, width: 90, height: 28 }
+      rubric: [],
+      regions: [{ page: 1, box: { x: 5, y: 25, width: 90, height: 28 } }],
+      boundingBox: { x: 5, y: 25, width: 90, height: 28 },
     },
     {
       id: "q3",
+      number: "3",
       questionNumber: 3,
+      parentQuestionNumber: "3",
+      section: "Section A",
       title: "Role of Chloroplasts",
       questionText: "Explain the role of chloroplasts in photosynthesis, naming the main pigments involved and briefly outlining the two major stages of the process.",
       maxMarks: 2,
@@ -149,12 +129,20 @@ export const SAMPLE_EVALUATION: EvaluationSession = {
       status: "correct",
       page: 1,
       confidence: 0.95,
+      studentAnswer: "Chloroplast contains chlorophyll which traps light...",
+      studentAnswerTranscription: "Chloroplast contains chlorophyll which traps light...",
+      modelAnswer: "Chloroplasts capture light energy to drive photosynthesis.",
       aiRemarks: "Clear explanation of light and dark reactions with chlorophyll pigment identified.",
-      boundingBox: { x: 5, y: 55, width: 90, height: 25 }
+      rubric: [],
+      regions: [{ page: 1, box: { x: 5, y: 55, width: 90, height: 25 } }],
+      boundingBox: { x: 5, y: 55, width: 90, height: 25 },
     },
     {
       id: "q4",
+      number: "4",
       questionNumber: 4,
+      parentQuestionNumber: "4",
+      section: "Section A",
       title: "Heart Blood Flow Sequence",
       questionText: "Describe the flow of blood through the human heart starting from the right atrium and ending at the aorta; include the names of valves crossed.",
       maxMarks: 2,
@@ -162,12 +150,20 @@ export const SAMPLE_EVALUATION: EvaluationSession = {
       status: "incorrect",
       page: 2,
       confidence: 0.92,
+      studentAnswer: "Right atrium to left atrium directly...",
+      studentAnswerTranscription: "Right atrium to left atrium directly...",
+      modelAnswer: "Right atrium -> tricuspid valve -> right ventricle -> pulmonary valve -> lungs -> left atrium -> bicuspid valve -> left ventricle -> aortic valve -> aorta.",
       aiRemarks: "Incomplete description. Missed tricuspid valve transition and pulmonary circulation steps.",
-      boundingBox: { x: 5, y: 5, width: 90, height: 20 }
+      rubric: [],
+      regions: [{ page: 2, box: { x: 5, y: 5, width: 90, height: 20 } }],
+      boundingBox: { x: 5, y: 5, width: 90, height: 20 },
     },
     {
       id: "q5",
+      number: "5",
       questionNumber: 5,
+      parentQuestionNumber: "5",
+      section: "Section A",
       title: "Alveolus Diagram",
       questionText: "Draw a labelled diagram of an alveolus showing capillaries and air space (label alveolar sac, capillary, and direction of gas exchange).",
       maxMarks: 2,
@@ -175,127 +171,186 @@ export const SAMPLE_EVALUATION: EvaluationSession = {
       status: "correct",
       page: 2,
       confidence: 0.96,
+      studentAnswer: "Labelled diagram of alveolus",
+      studentAnswerTranscription: "Labelled diagram of alveolus",
+      modelAnswer: "Alveolus surrounded by capillary network with O2/CO2 diffusion.",
       aiRemarks: "Accurate diagram with diffusion gradients clearly marked.",
-      boundingBox: { x: 5, y: 28, width: 90, height: 22 }
+      rubric: [],
+      regions: [{ page: 2, box: { x: 5, y: 28, width: 90, height: 22 } }],
+      boundingBox: { x: 5, y: 28, width: 90, height: 22 },
     },
     {
       id: "q6",
+      number: "6",
       questionNumber: 6,
-      title: "Digestive System Diagram",
-      questionText: "Draw a neat labelled diagram of the human digestive system (stomach, small intestine, large intestine, liver, pancreas) and label the site where most absorption occurs.",
-      maxMarks: 5,
-      marksObtained: 4,
-      status: "partial",
+      parentQuestionNumber: "6",
+      section: "Section B",
+      title: "Nephron Structure",
+      questionText: "What is the structural and functional unit of the kidney? Briefly describe its main parts.",
+      maxMarks: 3,
+      marksObtained: 3,
+      status: "correct",
       page: 2,
-      confidence: 0.94,
-      aiRemarks: "Well-labelled diagram. Deducted 1 mark as villi absorption site in ileum was not fully highlighted.",
-      boundingBox: { x: 5, y: 52, width: 90, height: 28 }
+      confidence: 0.97,
+      studentAnswer: "Nephron is the structural and functional unit of kidney...",
+      studentAnswerTranscription: "Nephron is the structural and functional unit of kidney...",
+      modelAnswer: "Nephron with Bowman's capsule, glomerulus, and tubules.",
+      aiRemarks: "Complete answer: Nephron identified and all key components described accurately.",
+      rubric: [],
+      regions: [{ page: 2, box: { x: 5, y: 52, width: 90, height: 24 } }],
+      boundingBox: { x: 5, y: 52, width: 90, height: 24 },
     },
     {
       id: "q7",
+      number: "7",
       questionNumber: 7,
-      title: "Nephron Structure",
-      questionText: "Draw and label a nephron (Bowman's capsule, glomerulus, proximal tubule, loop of Henle, distal tubule, collecting duct).",
-      maxMarks: 5,
-      marksObtained: 5,
-      status: "correct",
+      parentQuestionNumber: "7",
+      section: "Section B",
+      title: "Enzyme Action in Digestion",
+      questionText: "Name the enzyme present in saliva and explain its action on food.",
+      maxMarks: 3,
+      marksObtained: 2,
+      status: "partial",
       page: 3,
-      confidence: 0.97,
-      aiRemarks: "Flawless representation of nephron ultrafiltration and reabsorption anatomy.",
-      boundingBox: { x: 5, y: 5, width: 90, height: 25 }
+      confidence: 0.93,
+      studentAnswer: "Salivary amylase breaks starch...",
+      studentAnswerTranscription: "Salivary amylase breaks starch...",
+      modelAnswer: "Salivary amylase (ptyalin) converts starch into maltose.",
+      aiRemarks: "Partially correct. Identified salivary amylase and starch breakdown, but missed specifying optimum pH and end-product (maltose).",
+      rubric: [],
+      regions: [{ page: 3, box: { x: 5, y: 5, width: 90, height: 22 } }],
+      boundingBox: { x: 5, y: 5, width: 90, height: 22 },
     },
     {
       id: "q8",
+      number: "8",
       questionNumber: 8,
-      title: "Mesophyll Structural Differences",
-      questionText: "Explain the structural differences between palisade mesophyll and spongy mesophyll and state how each structure aids its function in the leaf.",
-      maxMarks: 5,
+      parentQuestionNumber: "8",
+      section: "Section B",
+      title: "Aerobic vs Anaerobic Respiration",
+      questionText: "Differentiate between aerobic and anaerobic respiration based on: (a) oxygen requirement, (b) end products, and (c) energy released.",
+      maxMarks: 3,
       marksObtained: 3,
-      status: "partial",
-      page: 3,
-      confidence: 0.91,
-      aiRemarks: "Identified chloroplast density differences, but omitted air cavity gaseous exchange role.",
-      boundingBox: { x: 5, y: 32, width: 90, height: 22 }
-    },
-    {
-      id: "q9",
-      questionNumber: 9,
-      title: "Plant Transpiration",
-      questionText: "Describe the process of transpiration in plants in two to three sentences and name two environmental factors that increase its rate.",
-      maxMarks: 5,
-      marksObtained: 5,
       status: "correct",
       page: 3,
       confidence: 0.98,
-      aiRemarks: "Accurately stated stomatal water evaporation and listed temperature & wind velocity factors.",
-      boundingBox: { x: 5, y: 56, width: 90, height: 22 }
+      studentAnswer: "Aerobic requires O2 (CO2 + H2O, 38 ATP), Anaerobic no O2 (Lactic acid / Ethanol, 2 ATP)",
+      studentAnswerTranscription: "Aerobic requires O2 (CO2 + H2O, 38 ATP), Anaerobic no O2 (Lactic acid / Ethanol, 2 ATP)",
+      modelAnswer: "Three-point comparison table accurately written.",
+      aiRemarks: "Excellent tabular comparison covering all 3 required criteria.",
+      rubric: [],
+      regions: [{ page: 3, box: { x: 5, y: 30, width: 90, height: 32 } }],
+      boundingBox: { x: 5, y: 30, width: 90, height: 32 },
+    },
+    {
+      id: "q9",
+      number: "9",
+      questionNumber: 9,
+      parentQuestionNumber: "9",
+      section: "Section B",
+      title: "Reflex Arc Components",
+      questionText: "Trace the pathway of a reflex arc from receptor to effector during a knee-jerk reaction.",
+      maxMarks: 3,
+      marksObtained: 3,
+      status: "correct",
+      page: 3,
+      confidence: 0.94,
+      studentAnswer: "Receptor -> Sensory Neuron -> Spinal Cord -> Motor Neuron -> Effector",
+      studentAnswerTranscription: "Receptor -> Sensory Neuron -> Spinal Cord -> Motor Neuron -> Effector",
+      modelAnswer: "Correct five-component pathway.",
+      aiRemarks: "All 5 components of the reflex arc correctly sequenced and labelled.",
+      rubric: [],
+      regions: [{ page: 3, box: { x: 5, y: 65, width: 90, height: 26 } }],
+      boundingBox: { x: 5, y: 65, width: 90, height: 26 },
     },
     {
       id: "q10",
+      number: "10",
       questionNumber: 10,
-      title: "Xylem Vessel Function",
-      questionText: "Explain how the structure of xylem vessels facilitates water transport in plants (mention one structural feature and its role).",
-      maxMarks: 5,
-      marksObtained: 4,
-      status: "partial",
+      parentQuestionNumber: "10",
+      section: "Section B",
+      title: "Xylem vs Phloem Transport",
+      questionText: "How does the transport of materials in xylem differ from that in phloem?",
+      maxMarks: 3,
+      marksObtained: 3,
+      status: "correct",
       page: 4,
-      confidence: 0.93,
-      aiRemarks: "Good mention of lignified hollow tubes providing tensile strength against transpirational pull.",
-      boundingBox: { x: 5, y: 5, width: 90, height: 20 }
+      confidence: 0.96,
+      studentAnswer: "Xylem transports water unidirectionally; Phloem transports food bidirectionally.",
+      studentAnswerTranscription: "Xylem transports water unidirectionally; Phloem transports food bidirectionally.",
+      modelAnswer: "Unidirectional water/minerals vs bidirectional organic solutes.",
+      aiRemarks: "Correct distinction between unidirectional water/mineral transport and bidirectional food translocation.",
+      rubric: [],
+      regions: [{ page: 4, box: { x: 5, y: 5, width: 90, height: 24 } }],
+      boundingBox: { x: 5, y: 5, width: 90, height: 24 },
     },
     {
       id: "q11a",
+      number: "11(a)",
       questionNumber: 11,
-      subNumber: "a.",
-      title: "Plant Phototropism & Dim Light",
-      questionText: "A diagram shows two potted plants — Plant A in bright light with broad green leaves, Plant B kept in dim light with pale, elongated leaves.",
-      maxMarks: 2,
-      marksObtained: 2,
+      parentQuestionNumber: "11",
+      subPart: "a",
+      subNumber: "11 a.",
+      section: "Section C",
+      title: "Double Circulation - Definition",
+      questionText: "Why is blood circulation in human heart called double circulation?",
+      maxMarks: 2.5,
+      marksObtained: 2.5,
       status: "correct",
       page: 4,
-      confidence: 0.95,
-      aiRemarks: "Correctly identified etiolation and chlorophyll breakdown in dim lighting conditions.",
-      boundingBox: { x: 5, y: 27, width: 90, height: 20 }
+      confidence: 0.97,
+      studentAnswer: "Blood passes twice through the heart during one complete cycle.",
+      studentAnswerTranscription: "Blood passes twice through the heart during one complete cycle.",
+      modelAnswer: "Blood flows through the heart twice in one complete cardiac cycle.",
+      aiRemarks: "Precise definition with pulmonary and systemic circulation circuits identified.",
+      rubric: [],
+      regions: [{ page: 4, box: { x: 5, y: 32, width: 90, height: 18 } }],
+      boundingBox: { x: 5, y: 32, width: 90, height: 18 },
     },
     {
       id: "q11b",
+      number: "11(b)",
       questionNumber: 11,
-      subNumber: "b.",
-      title: "Plant Recovery Measure",
-      questionText: "Suggest one practical measure to help Plant B recover.",
-      maxMarks: 3,
-      marksObtained: 1,
-      status: "partial",
+      parentQuestionNumber: "11",
+      subPart: "b",
+      subNumber: "11 b.",
+      section: "Section C",
+      title: "Double Circulation - Significance",
+      questionText: "What is the evolutionary advantage of having four-chambered heart in birds and mammals?",
+      maxMarks: 2.5,
+      marksObtained: 2.5,
+      status: "correct",
       page: 4,
-      confidence: 0.88,
-      aiRemarks: "Recommended gradual sunlight exposure, but missed nutrient soil supplementation.",
-      boundingBox: { x: 5, y: 49, width: 90, height: 18 }
+      confidence: 0.95,
+      studentAnswer: "Prevents mixing of oxygenated and deoxygenated blood, maintaining high body temperature.",
+      studentAnswerTranscription: "Prevents mixing of oxygenated and deoxygenated blood, maintaining high body temperature.",
+      modelAnswer: "Complete separation of oxygenated/deoxygenated blood ensures high efficiency for warm-blooded animals.",
+      aiRemarks: "Excellent reasoning on preventing oxygen mixing and maintaining homeothermy.",
+      rubric: [],
+      regions: [{ page: 4, box: { x: 5, y: 52, width: 90, height: 20 } }],
+      boundingBox: { x: 5, y: 52, width: 90, height: 20 },
     },
     {
       id: "q12",
+      number: "12",
       questionNumber: 12,
-      title: "Respiratory Tidal Volume",
-      questionText: "A resting person has tidal volume (air per breath) of 0.5 L and breathes 12 times per minute.",
+      parentQuestionNumber: "12",
+      section: "Section C",
+      title: "Plant Hormones Overview",
+      questionText: "Name four plant hormones and state one major physiological function of each.",
       maxMarks: 5,
       marksObtained: 4,
       status: "partial",
       page: 4,
-      confidence: 0.92,
-      aiRemarks: "Correct total minute ventilation equation (6.0 L/min).",
-      boundingBox: { x: 5, y: 69, width: 90, height: 15 }
+      confidence: 0.91,
+      studentAnswer: "Auxin (cell elongation), Gibberellin (stem growth), Cytokinin (cell division), Abscisic Acid (stress/leaf fall).",
+      studentAnswerTranscription: "Auxin (cell elongation), Gibberellin (stem growth), Cytokinin (cell division), Abscisic Acid (stress/leaf fall).",
+      modelAnswer: "Four phytohormones with accurate primary functions.",
+      aiRemarks: "Named all 4 phytohormones (Auxin, Gibberellin, Cytokinin, ABA) with functions; minor detail omitted on ethylene.",
+      rubric: [],
+      regions: [{ page: 4, box: { x: 5, y: 74, width: 90, height: 22 } }],
+      boundingBox: { x: 5, y: 74, width: 90, height: 22 },
     },
-    {
-      id: "q13",
-      questionNumber: 13,
-      title: "Alveolar Ventilation Calculation",
-      questionText: "If dead space is 0.15 L per breath, calculate the alveolar ventilation per minute. Show working.",
-      maxMarks: 5,
-      marksObtained: 4,
-      status: "partial",
-      page: 4,
-      confidence: 0.94,
-      aiRemarks: "Calculated (0.5 - 0.15) * 12 = 4.2 L/min with step-by-step working.",
-      boundingBox: { x: 5, y: 85, width: 90, height: 14 }
-    }
-  ]
+  ],
+  unmappedAnswers: [],
 };

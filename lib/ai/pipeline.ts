@@ -3,6 +3,7 @@ import {
   extractHandwrittenAnswers,
   mapAnswersAndGrade,
   validateDocuments,
+  PipelineTokenTracker,
 } from "@/lib/ai/gemini";
 import {
   formatGroundingForPrompt,
@@ -32,6 +33,8 @@ import type {
 } from "@/lib/ai/schemas";
 
 export async function runEvaluationPipeline(sessionId: string): Promise<void> {
+  PipelineTokenTracker.reset();
+
   const session = getSession(sessionId);
   if (!session?.questionPaper || !session.answerSheet) {
     console.error(`❌ [pipeline] Session ${sessionId} missing uploads`);
@@ -150,12 +153,6 @@ export async function runEvaluationPipeline(sessionId: string): Promise<void> {
       extracted.generalInstructions.forEach((inst, i) => console.log(`      ${i + 1}. ${inst}`));
     }
 
-    extracted.questions.forEach((q) => {
-      const secTag = q.section ? `[${q.section}] ` : "";
-      const optTag = q.isOptional ? `(Optional Choice: ${q.choiceGroup || 'OR'}) ` : "";
-      console.log(`   👉 ${secTag}Q${q.number} (${q.maxMarks} max marks) ${optTag}: ${q.questionText.slice(0, 70).replace(/\n/g, ' ')}...`);
-    });
-
     // ------------------------------------------------------------------
     // STEP 4: Extract Handwritten Answers & Spatial Regions from Sheet
     // ------------------------------------------------------------------
@@ -164,7 +161,7 @@ export async function runEvaluationPipeline(sessionId: string): Promise<void> {
 
     console.log(`✅ [pipeline] [4/6] Transcribed ${extractedAnswers.answers.length} handwritten answer section(s).`);
     extractedAnswers.answers.forEach((ans, idx) => {
-      console.log(`   ✍️ [Answer #${idx + 1}] Label: "${ans.label || 'N/A'}" | Page: ${ans.page} | Box: [${ans.box_2d.join(', ')}] | Text: "${ans.transcription.slice(0, 60).replace(/\n/g, ' ')}..."`);
+      console.log(`   ✍️ [Answer #${idx + 1}] ID: "${ans.id || `ans_${idx + 1}`}" | Label: "${ans.label || 'N/A'}" | Page: ${ans.page} | Box: [${ans.box_2d.join(', ')}] | Text: "${ans.transcription.slice(0, 60).replace(/\n/g, ' ')}..."`);
     });
 
     // ------------------------------------------------------------------
@@ -207,17 +204,15 @@ export async function runEvaluationPipeline(sessionId: string): Promise<void> {
 
     console.log(`✅ [pipeline] [6/6] Answer matching & grading complete.`);
     console.log(`   📊 Total Answers Mapped: ${mapped.answers.length} | Unmapped Regions: ${mapped.unmappedAnswers?.length || 0}`);
-    mapped.answers.forEach((ans) => {
-      console.log(`   🎯 Q${ans.questionNumber} -> Status: [${ans.status.toUpperCase()}] | Score: ${ans.marksObtained}/${ans.maxMarks} | Regions: ${ans.regions.length} box(es) | Remarks: "${ans.aiRemarks.slice(0, 60)}..."`);
-    });
 
     // ------------------------------------------------------------------
-    // Finalize Evaluation Session & Bounding Box Overlays
+    // Finalize Evaluation Session & Accurate Spatial Highlights
     // ------------------------------------------------------------------
     setSessionStage(sessionId, "grade_feedback");
     const evaluation = buildEvaluationSession({
       sessionId,
       extracted,
+      extractedAnswers,
       mapped,
       totalPages: pages.length,
       overallFeedback: mapped.overallFeedback,
@@ -226,9 +221,15 @@ export async function runEvaluationPipeline(sessionId: string): Promise<void> {
 
     setEvaluation(sessionId, evaluation);
 
+    const tokenTotals = PipelineTokenTracker.getTotals();
+
     console.log(`\n======================================================`);
     console.log(`🎉 [pipeline] Evaluation Complete for Session: ${sessionId}`);
     console.log(`📈 Total Score: ${evaluation.totalMarks}/${evaluation.maxMarks} (${evaluation.percentage}%) | Grade: ${evaluation.gradeBadge}`);
+    console.log(`🪙 Pipeline Token Usage (${tokenTotals.count} Gemini API calls):`);
+    console.log(`   * Tokens IN  (Prompt)     : ${tokenTotals.totalIn.toLocaleString()} tokens`);
+    console.log(`   * Tokens OUT (Candidates) : ${tokenTotals.totalOut.toLocaleString()} tokens`);
+    console.log(`   * Total Session Tokens    : ${tokenTotals.grandTotal.toLocaleString()} tokens`);
     console.log(`======================================================\n`);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown pipeline error";
@@ -318,12 +319,24 @@ function toSessionFailure(v: ValidateDocumentsResult): SessionFailure {
 function buildEvaluationSession(args: {
   sessionId: string;
   extracted: ExtractQuestionsResult;
+  extractedAnswers: ExtractAnswersResult;
   mapped: Awaited<ReturnType<typeof mapAnswersAndGrade>>;
   totalPages: number;
   overallFeedback?: string | null;
   grounding?: GroundingBrief;
 }): EvaluationSession {
-  const { sessionId, extracted, mapped, totalPages, grounding } = args;
+  const { sessionId, extracted, extractedAnswers, mapped, totalPages, grounding } = args;
+
+  // Build lookups for ground-truth extracted handwritten answers
+  const answerById = new Map(
+    extractedAnswers.answers.map((a) => [a.id, a]),
+  );
+  const answerByLabel = new Map(
+    extractedAnswers.answers
+      .filter((a) => Boolean(a.label))
+      .map((a) => [normalizeNumber(a.label!), a]),
+  );
+
   const byNumber = new Map(
     mapped.answers.map((a) => [normalizeNumber(a.questionNumber), a]),
   );
@@ -331,14 +344,50 @@ function buildEvaluationSession(args: {
   const questions: MappedQuestion[] = extracted.questions.map((q, index) => {
     const hit = byNumber.get(normalizeNumber(q.number));
     const maxMarks = Math.max(0.25, hit?.maxMarks || q.maxMarks || 1);
-    const regions = (hit?.regions ?? []).map(toRegion);
-    const first = regions[0];
     const status = hit?.status ?? "unanswered";
     const marksObtained =
       status === "unanswered" || status === "optional_skipped"
         ? 0
         : Math.min(maxMarks, hit?.marksObtained ?? 0);
     const transcription = hit?.studentAnswer ?? "";
+
+    // Determine accurate bounding box:
+    let regions: AnswerRegion[] = [];
+
+    // 1. If matchedAnswerId exists in extractedAnswers, use that ground-truth detected box
+    if (hit?.matchedAnswerId && answerById.has(hit.matchedAnswerId)) {
+      const matched = answerById.get(hit.matchedAnswerId)!;
+      regions = [toRegion({ page: matched.page, box_2d: matched.box_2d })];
+    }
+
+    // 2. Or check if hit.regions contains real non-dummy boxes
+    if (regions.length === 0 && Array.isArray(hit?.regions) && hit.regions.length > 0) {
+      const valid = hit.regions
+        .filter((r) => r && Array.isArray(r.box_2d) && (r.box_2d[0] !== 50 || r.box_2d[1] !== 50 || r.box_2d[2] !== 200))
+        .map(toRegion);
+      if (valid.length > 0) regions = valid;
+    }
+
+    // 3. Match by question label in extractedAnswers (e.g. "Q.1", "Q.17", "Q.24(i)", "Q.33(ii)")
+    if (
+      regions.length === 0 &&
+      status !== "unanswered" &&
+      status !== "optional_skipped"
+    ) {
+      const normQ = normalizeNumber(q.number);
+      const normSub = q.subNumber ? normalizeNumber(q.subNumber) : null;
+      const matched =
+        answerByLabel.get(normQ) ||
+        (normSub ? answerByLabel.get(normSub) : undefined) ||
+        answerByLabel.get(`ans${normQ}`) ||
+        answerByLabel.get(`q${normQ}`) ||
+        (normSub ? answerByLabel.get(`q${normSub}`) : undefined);
+      if (matched) {
+        regions = [toRegion({ page: matched.page, box_2d: matched.box_2d })];
+      }
+    }
+
+    const first = regions[0];
 
     return {
       id: `q${index + 1}`,
@@ -365,6 +414,9 @@ function buildEvaluationSession(args: {
       page: first?.page ?? 1,
       boundingBox: first?.box ?? emptyBox(),
       section: q.section,
+      parentQuestionNumber: q.parentQuestionNumber,
+      subPart: q.subPart,
+      subNumber: q.subNumber,
       isOptional: q.isOptional,
       choiceGroup: q.choiceGroup,
     };
@@ -378,15 +430,14 @@ function buildEvaluationSession(args: {
     }),
   );
 
-  const withBoxes = applyFallbackRegions(questions);
-  const totalMarks = withBoxes.reduce((s, q) => s + q.marksObtained, 0);
+  const totalMarks = questions.reduce((s, q) => s + q.marksObtained, 0);
 
   // Derive maximum marks from printed paper header (e.g. 80, 100, 150),
   // or by summing compulsory questions + 1 choice per choiceGroup.
   let maxMarks = extracted.totalPaperMarks;
   if (!maxMarks || maxMarks <= 0) {
     const choiceGroupsSeen = new Set<string>();
-    maxMarks = withBoxes.reduce((s, q) => {
+    maxMarks = questions.reduce((s, q) => {
       if (q.isOptional && q.choiceGroup) {
         if (choiceGroupsSeen.has(q.choiceGroup)) return s;
         choiceGroupsSeen.add(q.choiceGroup);
@@ -415,7 +466,7 @@ function buildEvaluationSession(args: {
     percentage,
     gradeBadge: gradeBadge(percentage),
     totalPages,
-    questions: withBoxes,
+    questions,
     unmappedAnswers,
     grounding,
     totalPaperMarks: extracted.totalPaperMarks ?? maxMarks,
@@ -423,43 +474,6 @@ function buildEvaluationSession(args: {
     sections: extracted.sections,
     generalInstructions: extracted.generalInstructions,
   };
-}
-
-function applyFallbackRegions(questions: MappedQuestion[]): MappedQuestion[] {
-  const needing = questions.filter(
-    (q) =>
-      q.status !== "unanswered" &&
-      q.status !== "optional_skipped" &&
-      (q.regions.length === 0 ||
-        (!q.boundingBox.width && !q.boundingBox.height)),
-  );
-  if (needing.length === 0) return questions;
-
-  const slot = Math.max(10, Math.floor(80 / needing.length));
-  let cursor = 8;
-
-  return questions.map((q) => {
-    if (
-      q.status === "unanswered" ||
-      q.status === "optional_skipped" ||
-      (q.regions.length > 0 && (q.boundingBox.width || q.boundingBox.height))
-    ) {
-      return q;
-    }
-    const box = {
-      x: 6,
-      y: cursor,
-      width: 88,
-      height: Math.min(slot - 1, 18),
-    };
-    cursor += slot;
-    return {
-      ...q,
-      page: q.page || 1,
-      boundingBox: box,
-      regions: [{ page: q.page || 1, box }],
-    };
-  });
 }
 
 function toRegion(r: {
@@ -473,7 +487,7 @@ function toRegion(r: {
 }
 
 function normalizeNumber(n: string) {
-  return n.replace(/\s+/g, "").toLowerCase();
+  return n.replace(/[^a-z0-9]/gi, "").toLowerCase();
 }
 
 function gradeBadge(pct: number) {

@@ -16,14 +16,14 @@ import {
   FileWarning,
   Lightbulb,
   RefreshCw,
+  Layers,
 } from "lucide-react";
 import { SidebarNav } from "./sidebar-nav";
 import { DocumentViewer } from "./document-viewer";
 import { QuestionCard } from "./question-card";
-import { SAMPLE_EVALUATION, EvaluationSession } from "./mock-data";
+import { SAMPLE_EVALUATION } from "./mock-data";
 import { useEvaluationSession } from "@/lib/api/hooks";
-import { sessionPageUrl } from "@/lib/api/evaluation";
-import type { SessionFailure } from "@/lib/types/evaluation";
+import type { EvaluationSession, MappedQuestion, SessionFailure } from "@/lib/types/evaluation";
 
 export function AnalyzerPage() {
   const searchParams = useSearchParams();
@@ -48,6 +48,7 @@ export function AnalyzerPage() {
     "questions" | "document"
   >("questions");
   const [expandAll, setExpandAll] = useState(false);
+  const [selectedSection, setSelectedSection] = useState<string>("all");
 
   const isDemoBrowse = !sessionId;
   const payload = sessionQuery.data;
@@ -89,6 +90,27 @@ export function AnalyzerPage() {
       setMobileActiveTab("document");
     }
   };
+
+  // Distinct sections
+  const availableSections = useMemo(() => {
+    if (!evaluation) return [];
+    if (evaluation.sections && evaluation.sections.length > 0) {
+      return evaluation.sections;
+    }
+    const secNames = Array.from(
+      new Set(evaluation.questions.map((q) => q.section).filter(Boolean)),
+    ) as string[];
+    return secNames.map((name) => ({ name }));
+  }, [evaluation]);
+
+  // Filtered questions based on selectedSection
+  const filteredQuestions = useMemo(() => {
+    if (!evaluation) return [];
+    if (selectedSection === "all") return evaluation.questions;
+    return evaluation.questions.filter(
+      (q) => (q.section || "General") === selectedSection,
+    );
+  }, [evaluation, selectedSection]);
 
   return (
     <div className="flex h-screen w-full bg-[#EBEBE8] p-2 md:p-3.5 gap-3 overflow-hidden text-neutral-900 font-sans">
@@ -148,8 +170,19 @@ export function AnalyzerPage() {
               </Link>
               <div className="flex items-center gap-2 text-sm text-neutral-500">
                 <Clipboard className="w-4 h-4" />
-                <span>Exams</span>
-                <ChevronDown className="w-3.5 h-3.5" />
+                <span className="font-bold text-neutral-900">
+                  {evaluation?.title || "Exam Evaluation"}
+                </span>
+                {evaluation?.subject && (
+                  <span className="text-xs px-2 py-0.5 rounded-md bg-neutral-100 text-neutral-600 border border-neutral-200">
+                    {evaluation.subject} {evaluation.grade ? `• ${evaluation.grade}` : ""}
+                  </span>
+                )}
+                {evaluation?.totalPaperMarks && (
+                  <span className="text-xs px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 font-bold border border-emerald-200">
+                    Max: {evaluation.totalPaperMarks} Marks
+                  </span>
+                )}
               </div>
             </div>
             <div className="flex items-center gap-2">
@@ -170,7 +203,9 @@ export function AnalyzerPage() {
                     className="object-cover"
                   />
                 </div>
-                <span className="text-sm font-semibold">Madhur Rastogi</span>
+                <span className="text-sm font-semibold">
+                  {evaluation?.studentName || "Madhur Rastogi"}
+                </span>
               </div>
             </div>
           </div>
@@ -240,13 +275,16 @@ export function AnalyzerPage() {
                   mobileActiveTab === "document" ? "hidden md:flex" : "flex"
                 }`}
               >
-                <div className="px-5 py-4 border-b border-neutral-100 flex items-center justify-between flex-shrink-0 bg-white">
-                  <h2 className="font-bold text-sm sm:text-base text-neutral-900 tracking-tight">
-                    Extracted Questions{" "}
-                    <span className="text-neutral-600 font-normal">
-                      (from question paper)
-                    </span>
-                  </h2>
+                {/* Header Bar */}
+                <div className="px-5 py-3.5 border-b border-neutral-100 flex items-center justify-between flex-shrink-0 bg-white">
+                  <div>
+                    <h2 className="font-bold text-sm sm:text-base text-neutral-900 tracking-tight">
+                      Extracted Questions{" "}
+                      <span className="text-neutral-600 font-normal">
+                        ({evaluation.questions.length})
+                      </span>
+                    </h2>
+                  </div>
                   <button
                     type="button"
                     onClick={() => setExpandAll(!expandAll)}
@@ -256,46 +294,115 @@ export function AnalyzerPage() {
                   </button>
                 </div>
 
-                <div className="px-4 py-2 border-b border-neutral-100 flex items-center gap-3 text-xs text-neutral-500 bg-[#FAFAFA]">
-                  <span>
-                    {
-                      evaluation.questions.filter(
-                        (q) =>
-                          q.status !== "unanswered" &&
-                          ((q.regions && q.regions.length > 0) ||
-                            (q.boundingBox?.width ?? 0) > 0),
-                      ).length
-                    }
-                    /{evaluation.questions.length} mapped
+                {/* Score & Mapping Stats Summary Bar */}
+                <div className="px-4 py-2 border-b border-neutral-100 flex items-center justify-between text-xs text-neutral-500 bg-[#FAFAFA]">
+                  <div className="flex items-center gap-3">
+                    <span>
+                      {
+                        evaluation.questions.filter(
+                          (q) =>
+                            q.status !== "unanswered" &&
+                            q.status !== "optional_skipped" &&
+                            ((q.regions && q.regions.length > 0) ||
+                              (q.boundingBox?.width ?? 0) > 0),
+                        ).length
+                      }
+                      /{evaluation.questions.length} mapped
+                    </span>
+                    <span className="w-1 h-1 rounded-full bg-neutral-300" />
+                    <span className="font-bold text-neutral-900">
+                      {evaluation.totalMarks}/{evaluation.maxMarks} marks ({evaluation.percentage}%)
+                    </span>
+                  </div>
+
+                  <span className="font-bold text-xs px-2 py-0.5 rounded-full bg-[#EAF8F0] text-[#1E9E54] border border-[#1E9E54]/20">
+                    {evaluation.gradeBadge}
                   </span>
-                  <span className="w-1 h-1 rounded-full bg-neutral-300" />
-                  <span>
-                    {evaluation.totalMarks}/{evaluation.maxMarks} marks
-                  </span>
-                  {evaluation.grounding?.usedGoogleSearch && (
-                    <>
-                      <span className="w-1 h-1 rounded-full bg-neutral-300" />
-                      <span className="text-emerald-700 font-semibold">
-                        Grounded
-                      </span>
-                    </>
-                  )}
                 </div>
 
-                <div className="flex-1 overflow-y-auto p-4 space-y-3.5 bg-[#FAFAFA]">
-                  {evaluation.questions.map((question) => (
-                    <QuestionCard
-                      key={question.id}
-                      question={question}
-                      isSelected={
-                        selectedQuestionId === question.id || expandAll
-                      }
-                      onSelect={() => handleSelectQuestion(question.id)}
-                    />
-                  ))}
+                {/* Section Navigation Tabs */}
+                {availableSections.length > 1 && (
+                  <div className="px-4 py-2 border-b border-neutral-100 flex items-center gap-1.5 overflow-x-auto no-scrollbar bg-white flex-shrink-0">
+                    <button
+                      onClick={() => setSelectedSection("all")}
+                      className={`px-3 py-1 rounded-full text-xs font-semibold whitespace-nowrap transition-colors cursor-pointer ${
+                        selectedSection === "all"
+                          ? "bg-[#292A2D] text-white shadow-xs"
+                          : "bg-neutral-100 text-neutral-600 hover:bg-neutral-200/70"
+                      }`}
+                    >
+                      All ({evaluation.questions.length})
+                    </button>
+                    {availableSections.map((sec) => {
+                      const count = evaluation.questions.filter(
+                        (q) => (q.section || "General") === sec.name,
+                      ).length;
+                      return (
+                        <button
+                          key={sec.name}
+                          onClick={() => setSelectedSection(sec.name)}
+                          className={`px-3 py-1 rounded-full text-xs font-semibold whitespace-nowrap transition-colors cursor-pointer ${
+                            selectedSection === sec.name
+                              ? "bg-[#292A2D] text-white shadow-xs"
+                              : "bg-neutral-100 text-neutral-600 hover:bg-neutral-200/70"
+                          }`}
+                        >
+                          {sec.name} ({count})
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Question List with Section Dividers */}
+                <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-[#FAFAFA]">
+                  {filteredQuestions.map((question, idx) => {
+                    const isFirstInSection =
+                      selectedSection === "all" &&
+                      question.section &&
+                      (idx === 0 || filteredQuestions[idx - 1].section !== question.section);
+
+                    const sectionMeta = evaluation.sections?.find(
+                      (s) => s.name === question.section,
+                    );
+
+                    return (
+                      <React.Fragment key={question.id}>
+                        {isFirstInSection && (
+                          <div className="pt-2 pb-1 first:pt-0">
+                            <div className="flex items-center justify-between px-3.5 py-2 rounded-xl bg-neutral-200/70 border border-neutral-300/70 shadow-2xs">
+                              <div className="flex items-center gap-2">
+                                <span className="font-extrabold text-xs text-neutral-900 uppercase tracking-wide">
+                                  {question.section}
+                                </span>
+                                {sectionMeta?.title && (
+                                  <span className="text-[11px] font-medium text-neutral-600">
+                                    • {sectionMeta.title}
+                                  </span>
+                                )}
+                              </div>
+                              {sectionMeta?.totalMarks && (
+                                <span className="text-[11px] font-bold text-neutral-700 bg-white px-2 py-0.5 rounded-full border border-neutral-200/80 shadow-2xs">
+                                  {sectionMeta.totalMarks} Marks
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        )}
+                        <QuestionCard
+                          question={question}
+                          isSelected={
+                            selectedQuestionId === question.id || expandAll
+                          }
+                          onSelect={() => handleSelectQuestion(question.id)}
+                        />
+                      </React.Fragment>
+                    );
+                  })}
                 </div>
               </div>
 
+              {/* Document Viewer (Right Column) */}
               <div
                 className={`w-full md:w-[52%] lg:w-[54%] h-full flex flex-col ${
                   mobileActiveTab === "questions" ? "hidden md:flex" : "flex"
@@ -318,21 +425,10 @@ export function AnalyzerPage() {
         {!isLoading &&
           !failure &&
           !evaluation &&
-          sessionQuery.isError && (
-            <div className="flex-1 flex items-center justify-center p-8">
-              <div className="text-center space-y-3">
-                <p className="text-sm text-red-700">
-                  {sessionQuery.error instanceof Error
-                    ? sessionQuery.error.message
-                    : "Failed to load session"}
-                </p>
-                <Link
-                  href="/"
-                  className="inline-flex items-center gap-2 text-sm font-semibold text-[#FF5722]"
-                >
-                  <ArrowLeft className="w-4 h-4" /> Re-upload
-                </Link>
-              </div>
+          !sessionId &&
+          isDemoBrowse && (
+            <div className="flex-1 flex items-center justify-center p-8 text-neutral-500">
+              No evaluation data available.
             </div>
           )}
       </div>
@@ -347,86 +443,72 @@ function FailedPanel({
 }: {
   failure: SessionFailure;
   sessionId: string | null;
-  hasPageImages: boolean;
+  hasPageImages?: boolean;
 }) {
   return (
-    <div className="flex-1 overflow-y-auto p-4 md:p-8">
-      <div className="max-w-3xl mx-auto rounded-3xl border border-amber-200 bg-white shadow-sm overflow-hidden">
-        <div className="px-6 py-5 border-b border-amber-100 bg-amber-50/80 flex items-start gap-3">
-          <div className="w-11 h-11 rounded-2xl bg-amber-100 text-amber-800 flex items-center justify-center shrink-0">
-            <FileWarning className="w-6 h-6" />
-          </div>
-          <div>
-            <h1 className="text-xl font-bold text-neutral-900">{failure.title}</h1>
-            <p className="mt-1 text-sm text-neutral-600 leading-relaxed">
-              {failure.summary}
-            </p>
-          </div>
-        </div>
+    <div className="flex-1 flex flex-col items-center justify-center p-6 sm:p-10 max-w-2xl mx-auto w-full text-left">
+      <div className="w-14 h-14 rounded-2xl bg-red-100 flex items-center justify-center text-red-600 mb-5 shadow-xs">
+        <AlertTriangle className="w-7 h-7 stroke-[2.2]" />
+      </div>
 
-        <div className="p-6 space-y-4">
-          {failure.issues.map((issue, idx) => (
-            <div
-              key={idx}
-              className="rounded-2xl border border-neutral-200 bg-neutral-50/80 p-4"
-            >
-              <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-neutral-500 mb-2">
-                <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
-                {issue.file === "questionPaper"
-                  ? "Question paper"
-                  : issue.file === "answerSheet"
-                    ? "Answer sheet"
-                    : "Both files"}
+      <h2 className="text-xl sm:text-2xl font-extrabold text-neutral-900 text-center tracking-tight">
+        {failure.title || "Evaluation Could Not Be Completed"}
+      </h2>
+      <p className="text-sm text-neutral-600 mt-2 text-center max-w-md leading-relaxed">
+        {failure.summary ||
+          "There was an issue processing or verifying your exam documents."}
+      </p>
+
+      {failure.issues && failure.issues.length > 0 && (
+        <div className="w-full bg-[#FFFBFB] rounded-2xl border border-red-200/80 p-4 sm:p-5 mt-6 space-y-3">
+          <div className="flex items-center gap-2 text-xs font-bold text-red-800 uppercase tracking-wider">
+            <FileWarning className="w-4 h-4" />
+            Detected Issues
+          </div>
+          <div className="space-y-2">
+            {failure.issues.map((issue, idx) => (
+              <div
+                key={idx}
+                className="bg-white p-3 rounded-xl border border-red-100 text-xs text-neutral-800 space-y-1"
+              >
+                <div className="font-semibold text-red-900">
+                  {issue.file === "questionPaper"
+                    ? "📄 Question Paper"
+                    : issue.file === "answerSheet"
+                      ? "📝 Answer Sheet"
+                      : "📑 Uploaded Files"}
+                </div>
+                <p className="text-neutral-600 leading-normal font-normal">
+                  {issue.message}
+                </p>
               </div>
-              <p className="text-sm text-neutral-800">{issue.message}</p>
-              {issue.suggestions.length > 0 && (
-                <ul className="mt-3 space-y-1.5">
-                  {issue.suggestions.map((s, i) => (
-                    <li
-                      key={i}
-                      className="flex items-start gap-2 text-sm text-neutral-600"
-                    >
-                      <Lightbulb className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
-                      <span>{s}</span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          ))}
-
-          {hasPageImages && sessionId && (
-            <div className="rounded-2xl border border-neutral-200 p-4">
-              <p className="text-xs font-bold uppercase tracking-wide text-neutral-500 mb-2">
-                Answer sheet preview
-              </p>
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={sessionPageUrl(sessionId, 1)}
-                alt="Answer sheet preview"
-                className="w-full max-h-72 object-contain rounded-xl border border-neutral-200 bg-neutral-100"
-              />
-            </div>
-          )}
-
-          <div className="flex flex-wrap gap-3 pt-2">
-            <Link
-              href="/"
-              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-neutral-900 text-white text-sm font-medium hover:bg-[#FF5722]"
-            >
-              <ArrowLeft className="w-4 h-4" />
-              Re-upload files
-            </Link>
-            <button
-              type="button"
-              onClick={() => window.location.reload()}
-              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl border border-neutral-200 bg-white text-sm font-medium"
-            >
-              <RefreshCw className="w-4 h-4" />
-              Retry load
-            </button>
+            ))}
           </div>
         </div>
+      )}
+
+      {failure.suggestions && failure.suggestions.length > 0 && (
+        <div className="w-full bg-[#FAFAFA] rounded-2xl border border-neutral-200/80 p-4 sm:p-5 mt-4 space-y-2">
+          <div className="flex items-center gap-2 text-xs font-bold text-neutral-700 uppercase tracking-wider">
+            <Lightbulb className="w-4 h-4 text-amber-500" />
+            Suggested Actions
+          </div>
+          <ul className="list-disc list-inside text-xs text-neutral-600 space-y-1 font-normal">
+            {failure.suggestions.map((sug, idx) => (
+              <li key={idx}>{sug}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      <div className="mt-8 flex items-center gap-3">
+        <Link
+          href="/"
+          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-[#FF5722] text-white font-bold text-xs hover:bg-[#F4511E] transition-colors shadow-sm"
+        >
+          <RefreshCw className="w-4 h-4" />
+          Upload New Documents
+        </Link>
       </div>
     </div>
   );

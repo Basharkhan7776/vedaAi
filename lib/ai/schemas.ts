@@ -19,6 +19,8 @@ export const extractedQuestionSchema = z.object({
   maxMarks: z.number().min(0.25).default(1),
   section: z.string().nullish().describe('Section name e.g. "Section A", "Section B"'),
   parentQuestionNumber: z.string().nullish().describe('Parent question number e.g. "23" for "23(i)"'),
+  subPart: z.string().nullish().describe('Sub-part label e.g. "i", "ii", "a", "b"'),
+  subNumber: z.string().nullish().describe('Display label e.g. "23 i.", "11 a."'),
   isOptional: z.boolean().default(false).describe("True if this is an optional/alternative OR choice"),
   choiceGroup: z.string().nullish().describe('Group ID linking alternative choices e.g. "Q19_OR"'),
 });
@@ -43,6 +45,7 @@ export const answerRegionSchema = z.object({
 });
 
 export const extractedAnswerItemSchema = z.object({
+  id: z.string().default("").describe('Unique id for this answer section e.g. "ans_1", "ans_2"'),
   label: z
     .string()
     .nullish()
@@ -67,6 +70,7 @@ export const mappedAnswerSchema = z.object({
   questionNumber: z
     .string()
     .describe("Must match an extracted question number string"),
+  matchedAnswerId: z.string().nullish().describe('Id of the matched extracted answer e.g. "ans_1"'),
   studentAnswer: z.string().default(""),
   regions: z.array(answerRegionSchema).default([]),
   status: z.enum(["correct", "partial", "incorrect", "unanswered", "optional_skipped"]),

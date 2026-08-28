@@ -1,4 +1,1 @@
-- marking of the answer in the app is not correct also read the upper part of the question like 150 mark or 100 mark and section of the quesiton doable like a is compulsary and b or c are options, also the maximum marks in overall paper, first test in /script/test-sample.ts
-- min to max marking in the anwsers accordingly its satisfied, edgecases for scrible and minus marking in it.
 - On click to any questions will show that particular highlight, inner shade of the high light should be low. Highlight mechanism is not working well try to debug and fix it.
-- try to recognize the parts in questions like 22 i 22 ii 22 iii and all and it reflect in the respose and as well as the ui, same with the sections A , B or C.

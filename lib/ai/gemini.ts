@@ -2,7 +2,7 @@ import { GoogleGenAI } from "@google/genai";
 import { jsonrepair } from "jsonrepair";
 import type { StoredFile, StoredPage } from "@/lib/types/evaluation";
 import {
-  EXTRACT_ANSWERS_PROMPT,
+  EXTRACT_PAGE_ANSWERS_PROMPT,
   EXTRACT_QUESTIONS_PROMPT,
   VALIDATE_DOCUMENTS_PROMPT,
   buildMapAndGradePrompt,
@@ -27,6 +27,40 @@ const MODEL_POOL = [
   "gemini-flash-lite-latest",
   "gemini-3.6-flash",
 ];
+
+export const PipelineTokenTracker = {
+  history: [] as Array<{
+    stage: string;
+    model: string;
+    tokensIn: number;
+    tokensOut: number;
+    totalTokens: number;
+  }>,
+
+  record(
+    stage: string,
+    model: string,
+    tokensIn: number,
+    tokensOut: number,
+    totalTokens: number,
+  ) {
+    this.history.push({ stage, model, tokensIn, tokensOut, totalTokens });
+    console.log(
+      `   🪙 [gemini] Tokens IN: ${tokensIn.toLocaleString()} | Tokens OUT: ${tokensOut.toLocaleString()} | Total: ${totalTokens.toLocaleString()} (${model})`,
+    );
+  },
+
+  getTotals() {
+    const totalIn = this.history.reduce((sum, h) => sum + h.tokensIn, 0);
+    const totalOut = this.history.reduce((sum, h) => sum + h.tokensOut, 0);
+    const grandTotal = this.history.reduce((sum, h) => sum + h.totalTokens, 0);
+    return { totalIn, totalOut, grandTotal, count: this.history.length };
+  },
+
+  reset() {
+    this.history = [];
+  },
+};
 
 function getApiKeys(): string[] {
   const primary = process.env.GEMINI_API_KEY;
@@ -164,6 +198,82 @@ function tryParseJson(raw: string): unknown {
   }
 }
 
+export function parseQuestionNumber(raw: string): {
+  cleanNumber: string;
+  parentNumber: string;
+  subPart?: string;
+  subNumber?: string;
+} {
+  let trimmed = String(raw || "").trim();
+  trimmed = trimmed.replace(/^(?:Question|Q)\.?\s*/i, "").trim();
+
+  // Pattern 1: Standalone integer like "1", "16", "23", "100"
+  const intMatch = trimmed.match(/^(\d+)$/);
+  if (intMatch) {
+    return {
+      cleanNumber: intMatch[1],
+      parentNumber: intMatch[1],
+    };
+  }
+
+  // Pattern 2: Parentheses subpart like "22(i)", "11(a)", "33(v)", "24(1)"
+  const parenMatch = trimmed.match(/^(\d+)\s*\(([a-z0-9]+)\)$/i);
+  if (parenMatch) {
+    const parent = parenMatch[1];
+    const part = parenMatch[2].toLowerCase();
+    return {
+      cleanNumber: `${parent}(${part})`,
+      parentNumber: parent,
+      subPart: part,
+      subNumber: `${parent} ${part}.`,
+    };
+  }
+
+  // Pattern 3: Dot or space followed by letter or roman numeral e.g. "11 a.", "11 a", "22.ii", "22 i"
+  const letterMatch = trimmed.match(/^(\d+)\s*[\.\s]\s*([a-z]|[ivxlcdm]+)\.?$/i);
+  if (letterMatch) {
+    const parent = letterMatch[1];
+    const part = letterMatch[2].toLowerCase();
+    return {
+      cleanNumber: `${parent}(${part})`,
+      parentNumber: parent,
+      subPart: part,
+      subNumber: `${parent} ${part}.`,
+    };
+  }
+
+  // Pattern 4: Dot followed by sub-digit e.g. "22.1"
+  const dotNumMatch = trimmed.match(/^(\d+)\.(\d+)$/);
+  if (dotNumMatch) {
+    const parent = dotNumMatch[1];
+    const part = dotNumMatch[2];
+    return {
+      cleanNumber: `${parent}(${part})`,
+      parentNumber: parent,
+      subPart: part,
+      subNumber: `${parent} ${part}.`,
+    };
+  }
+
+  // Pattern 5: Number directly followed by letter e.g. "11a", "22b"
+  const directLetterMatch = trimmed.match(/^(\d+)([a-z])$/i);
+  if (directLetterMatch) {
+    const parent = directLetterMatch[1];
+    const part = directLetterMatch[2].toLowerCase();
+    return {
+      cleanNumber: `${parent}(${part})`,
+      parentNumber: parent,
+      subPart: part,
+      subNumber: `${parent} ${part}.`,
+    };
+  }
+
+  return {
+    cleanNumber: trimmed,
+    parentNumber: trimmed,
+  };
+}
+
 /** Normalize Gemini JSON output before Zod validation. */
 function normalizeModelJson(
   parsed: unknown,
@@ -200,7 +310,7 @@ function normalizeModelJson(
 
   if (kind === "answers") {
     if (Array.isArray(parsed)) {
-      return { answers: parsed.map(normalizeExtractedAnswerItem) };
+      return { answers: parsed.map((a, i) => normalizeExtractedAnswerItem(a, i)) };
     }
     if (parsed && typeof parsed === "object") {
       const obj = parsed as Record<string, unknown>;
@@ -209,7 +319,7 @@ function normalizeModelJson(
         ...obj,
         studentName: obj.studentName ? String(obj.studentName) : undefined,
         rollNumber: obj.rollNumber ? String(obj.rollNumber) : undefined,
-        answers: Array.isArray(list) ? list.map(normalizeExtractedAnswerItem) : [],
+        answers: Array.isArray(list) ? list.map((a, i) => normalizeExtractedAnswerItem(a, i)) : [],
       };
     }
   }
@@ -265,33 +375,37 @@ function normalizeExtractedQuestion(q: unknown) {
   if (!q || typeof q !== "object") return q;
   const o = q as Record<string, unknown>;
   const rawNum = String(o.number ?? o.label ?? o.id ?? "1").trim();
-  const cleanNum = rawNum.replace(/^(?:Q\.?)+/i, "").trim() || rawNum;
+  const parsedNumInfo = parseQuestionNumber(rawNum);
   const parsedMarks = Number(o.maxMarks ?? o.max_marks ?? o.marks ?? 1) || 1;
   return {
-    number: cleanNum,
+    number: parsedNumInfo.cleanNumber,
     title: o.title ? String(o.title) : undefined,
     questionText: String(
       o.questionText ?? o.text ?? o.question ?? o.prompt ?? "",
     ),
     maxMarks: Math.max(0.25, parsedMarks),
     section: o.section ? String(o.section) : undefined,
-    parentQuestionNumber: o.parentQuestionNumber ? String(o.parentQuestionNumber) : undefined,
+    parentQuestionNumber: o.parentQuestionNumber ? String(o.parentQuestionNumber) : parsedNumInfo.parentNumber,
+    subPart: parsedNumInfo.subPart,
+    subNumber: parsedNumInfo.subNumber,
     isOptional: Boolean(o.isOptional),
     choiceGroup: o.choiceGroup ? String(o.choiceGroup) : undefined,
   };
 }
 
-function normalizeExtractedAnswerItem(a: unknown) {
+function normalizeExtractedAnswerItem(a: unknown, idx = 0) {
   if (!a || typeof a !== "object") return a;
   const o = a as Record<string, unknown>;
   const region = normalizeRegion(o);
   const rawLabel = o.label ? String(o.label).trim() : undefined;
+  const rawId = o.id ? String(o.id).trim() : `ans_${idx + 1}`;
   return {
+    id: rawId,
     label: rawLabel,
     transcription: String(
       o.transcription ?? o.studentAnswer ?? o.text ?? o.answer ?? "",
     ),
-    page: Number(o.page ?? 1) || 1,
+    page: Number(o.page ?? region?.page ?? 1) || 1,
     box_2d: region?.box_2d ?? [50, 50, 200, 950],
   };
 }
@@ -302,7 +416,7 @@ function normalizeMappedAnswer(a: unknown) {
   const rawNum = String(
     o.questionNumber ?? o.number ?? o.question_id ?? o.id ?? "",
   ).trim();
-  const cleanNum = rawNum.replace(/^(?:Q\.?)+/i, "").trim() || rawNum;
+  const parsedNumInfo = parseQuestionNumber(rawNum);
   const regions = Array.isArray(o.regions)
     ? o.regions.map(normalizeRegion).filter(isValidRegion)
     : [];
@@ -313,7 +427,8 @@ function normalizeMappedAnswer(a: unknown) {
   );
 
   return {
-    questionNumber: cleanNum,
+    questionNumber: parsedNumInfo.cleanNumber,
+    matchedAnswerId: o.matchedAnswerId ? String(o.matchedAnswerId) : undefined,
     studentAnswer: String(
       o.studentAnswer ??
         o.studentAnswerText ??
@@ -361,7 +476,13 @@ function normalizeUnmappedAnswer(a: unknown) {
 function normalizeRegion(r: unknown) {
   if (!r || typeof r !== "object") return null;
   const o = r as Record<string, unknown>;
-  const box = o.box_2d ?? o.box2d ?? o.bbox ?? o.box;
+  let box = o.box_2d ?? o.box2d ?? o.bbox ?? o.box;
+
+  // Handle nested array e.g. [[ymin, xmin, ymax, xmax]]
+  if (Array.isArray(box) && box.length > 0 && Array.isArray(box[0])) {
+    box = box[0];
+  }
+
   if (!Array.isArray(box) || box.length < 4) return null;
   const nums = box.slice(0, 4).map(Number);
   if (nums.some((n) => !Number.isFinite(n))) return null;
@@ -431,6 +552,13 @@ async function generateJson<T>(
     const text = response.text;
     if (!text) {
       throw new Error("Gemini returned an empty response");
+    }
+
+    if (response.usageMetadata) {
+      const inT = response.usageMetadata.promptTokenCount ?? 0;
+      const outT = response.usageMetadata.candidatesTokenCount ?? 0;
+      const totalT = response.usageMetadata.totalTokenCount ?? (inT + outT);
+      PipelineTokenTracker.record(kind, currentModel, inT, outT, totalT);
     }
 
     let parsed: unknown;
@@ -565,24 +693,45 @@ export async function extractQuestions(
 export async function extractHandwrittenAnswers(
   pages: StoredPage[],
 ): Promise<ExtractAnswersResult> {
-  const parts: ContentPart[] = [
-    {
-      text: "Transcribe all handwritten student solutions and detect bounding boxes [ymin, xmin, ymax, xmax] normalized to 0-1000 for each section on each page.",
-    },
-  ];
+  const allAnswers: ExtractAnswersResult["answers"] = [];
+  let studentName: string | undefined;
+  let rollNumber: string | undefined;
 
   const pageLimit = Number(process.env.MAP_MAX_PAGES || 6);
-  for (const page of pages.slice(0, Math.max(1, pageLimit))) {
-    parts.push({ text: `Answer sheet page ${page.page}:` });
-    parts.push(pagePart(page));
+  const targetPages = pages.slice(0, Math.max(1, pageLimit));
+
+  console.log(`   📄 Extracting handwriting & bounding boxes across ${targetPages.length} pages (page-by-page)...`);
+
+  for (let i = 0; i < targetPages.length; i++) {
+    const pageNum = targetPages[i].page || (i + 1);
+    const prompt = EXTRACT_PAGE_ANSWERS_PROMPT.replace(/\{\{PAGE_NUMBER\}\}/g, String(pageNum));
+
+    const res = await generateJson(
+      [
+        { text: prompt },
+        pagePart(targetPages[i]),
+      ],
+      extractAnswersResultSchema,
+      `You transcribe handwriting and detect exact bounding boxes for page ${pageNum}.`,
+      "answers",
+    );
+
+    if (!studentName && res.studentName) studentName = res.studentName;
+    if (!rollNumber && res.rollNumber) rollNumber = res.rollNumber;
+    if (Array.isArray(res.answers)) {
+      allAnswers.push(...res.answers.map((a, idx) => ({
+        ...a,
+        id: a.id || `p${pageNum}_ans_${idx + 1}`,
+        page: pageNum,
+      })));
+    }
   }
 
-  return generateJson(
-    parts,
-    extractAnswersResultSchema,
-    EXTRACT_ANSWERS_PROMPT,
-    "answers",
-  );
+  return {
+    studentName,
+    rollNumber,
+    answers: allAnswers,
+  };
 }
 
 async function mapAnswersChunk(

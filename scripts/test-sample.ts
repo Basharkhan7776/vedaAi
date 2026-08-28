@@ -95,7 +95,8 @@ async function main() {
       const boxStr = q.regions.map(r => `P${r.page}:[x=${r.box.x}%, y=${r.box.y}%, w=${r.box.width}%, h=${r.box.height}%]`).join(" | ");
       const secPrefix = q.section ? `[${q.section}] ` : "";
       const optPrefix = q.isOptional ? `(Optional Choice: ${q.choiceGroup || 'OR'}) ` : "";
-      console.log(`\n[#${idx + 1}] ${secPrefix}Question ${q.number} ${optPrefix}: "${q.questionText.slice(0, 70).replace(/\n/g, ' ')}..."`);
+      const subInfo = q.subPart ? ` [Parent: ${q.parentQuestionNumber}, Part: ${q.subPart}, Label: "${q.subNumber || q.number}"]` : "";
+      console.log(`\n[#${idx + 1}] ${secPrefix}Question ${q.number}${subInfo} ${optPrefix}: "${q.questionText.slice(0, 70).replace(/\n/g, ' ')}..."`);
       console.log(`     Status       : [${q.status.toUpperCase()}]`);
       console.log(`     Score        : ${q.marksObtained} / ${q.maxMarks}`);
       console.log(`     Regions      : ${q.regions.length > 0 ? boxStr : "None (Unanswered / Skipped)"}`);

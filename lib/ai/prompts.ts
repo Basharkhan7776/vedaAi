@@ -51,8 +51,10 @@ Extraction Rules:
    - Extract EVERY question in printed order.
    - Treat labelled sub-parts as SEPARATE entries (e.g., "22(i)", "22(ii)", "23(i)", "33(a)").
    - "number": Original label without redundant 'Q.' prefixes (e.g. "1", "16", "22(i)", "23(i)", "33(i)").
+   - "parentQuestionNumber": Parent number (e.g. "22" for "22(i)").
+   - "subPart": Sub-part letter/numeral (e.g. "i", "ii", "a", "b").
+   - "subNumber": Clean display label (e.g. "22 i.", "11 a.").
    - "section": The section it belongs to (e.g. "Section A", "Section B").
-   - "parentQuestionNumber": Parent number if it is a sub-part (e.g. "23" for "23(i)").
    - "maxMarks": Proportional marks for this specific sub-part or question:
      * Standalone questions get their full section marks (e.g. Q1-15 in Section A get 1 mark each; Q16-18 in Section B get 2 marks each).
      * Multi-part questions have their section marks divided among sub-parts (e.g., Q22 in 2-mark Section B has (i) and (ii) -> 1 mark each; Q23 in 4-mark Section C has (i) and (ii) -> 2 marks each; Q33 in 5-mark Section D has (i) to (v) -> 1 mark each).
@@ -76,26 +78,28 @@ Return valid JSON only matching the schema:
   ]
 }`;
 
-export const EXTRACT_ANSWERS_PROMPT = `You transcribe student handwritten solutions from answer sheet page images.
+export const EXTRACT_PAGE_ANSWERS_PROMPT = `You are an expert handwriting transcription and spatial bounding box detector.
+For this single answer sheet page image (Page {{PAGE_NUMBER}}):
+1. Detect EVERY distinct handwritten answer, solution, or label written on this page.
+2. For each answer section:
+   - "label": Visible label written by student (e.g. "Q.1", "Ans 1", "Q.16", "Q.17", "Q.24(i)", "Q.33(ii)", "Section A")
+   - "transcription": Full text transcription of the handwriting
+   - "box_2d": [ymin, xmin, ymax, xmax] integers in 0-1000 normalized coordinates covering that exact handwritten section on this page image.
+     * ymin: top edge of handwriting (0 = top of image, 1000 = bottom of image)
+     * xmin: left edge of handwriting (0 = left margin, 1000 = right margin)
+     * ymax: bottom edge of handwriting
+     * xmax: right edge of handwriting
+   - "page": {{PAGE_NUMBER}}
 
-Tasks:
-1. Inspect each page image carefully.
-2. Extract all distinct answer sections written by the student.
-3. If the student wrote a question label (e.g. "Ans 1", "Q.2", "11(a)", "Section B - 3"), capture it in the "label" field.
-4. Transcribe the full handwritten text, mathematical steps, chemical equations, and diagram descriptions into "transcription".
-5. Detect the bounding box for that handwritten answer region as "box_2d": [ymin, xmin, ymax, xmax] integers normalized to 0-1000 on THAT page.
-6. Extract student name and roll number if written on top of the first sheet.
-
-Return valid JSON only matching the schema:
+Return JSON:
 {
-  "studentName": "...",
-  "rollNumber": "...",
   "answers": [
     {
-      "label": "Ans 1",
+      "id": "p{{PAGE_NUMBER}}_ans_1",
+      "label": "Q.1",
       "transcription": "...",
-      "page": 1,
-      "box_2d": [100, 50, 250, 950]
+      "page": {{PAGE_NUMBER}},
+      "box_2d": [69, 40, 97, 264]
     }
   ]
 }`;
@@ -116,22 +120,25 @@ ${groundingBlock}
 QUESTIONS TO EVALUATE:
 ${questionsJson}
 
-EXTRACTED HANDWRITTEN ANSWERS FROM ANSWER SHEET:
+EXTRACTED HANDWRITTEN ANSWERS FROM ANSWER SHEET (with exact page & box_2d):
 ${answersJson}
 
-Grading Guidelines:
+Grading & Spatial Mapping Guidelines:
 1. Match each student answer to its target question number using visible labels AND semantic content.
-2. For MCQs (Section A): Check if the selected option letter (A/B/C/D) or text matches the correct answer. Full 1 mark if correct, 0 if incorrect.
-3. For Descriptive / Multi-mark Questions (Section B, C, D):
+2. When an answer matches:
+   - "matchedAnswerId": id of the matched extracted answer (e.g. "p1_ans_1", "p2_ans_3")
+   - "regions": copy the EXACT region from that matched answer: [{ "page": P, "box_2d": [ymin, xmin, ymax, xmax] }]
+3. For MCQs (Section A): Check if the selected option letter (A/B/C/D) or text matches the correct answer. Full 1 mark if correct, 0 if incorrect.
+4. For Descriptive / Multi-mark Questions (Section B, C, D):
    - Award full or partial credit (0 up to maxMarks) based on correctness, completeness, steps, and key concepts.
    - status: "correct" (full marks), "partial" (partial marks > 0), "incorrect" (0 marks for wrong answer).
-4. For Unanswered Questions:
+5. For Unanswered Questions:
    - If no answer was found anywhere on the sheet for a compulsory question: status: "unanswered", marksObtained: 0, regions: [], aiRemarks: "No answer found on the answer sheet."
-5. For Optional / OR Choices:
+6. For Optional / OR Choices:
    - If the student answered one option in an OR choice pair, grade the attempted option.
    - For the unattempted alternative option: status: "optional_skipped", marksObtained: 0, regions: [], aiRemarks: "Alternative choice attempted."
-6. Provide concise, constructive "aiRemarks" explaining why marks were awarded or deducted.
-7. Return valid JSON matching the schema.
+7. Provide concise, constructive "aiRemarks" explaining why marks were awarded or deducted.
+8. Return valid JSON matching the schema.
 
 Return valid JSON only:
 {
@@ -140,12 +147,13 @@ Return valid JSON only:
   "answers": [
     {
       "questionNumber": "1",
+      "matchedAnswerId": "p1_ans_1",
       "studentAnswer": "...",
-      "regions": [{ "page": 1, "box_2d": [100, 50, 200, 950] }],
+      "regions": [{ "page": 1, "box_2d": [69, 40, 97, 264] }],
       "status": "correct",
       "marksObtained": 1,
       "maxMarks": 1,
-      "aiRemarks": "Correctly identified pulp cavity as containing nerves and blood vessels.",
+      "aiRemarks": "Correct answer.",
       "isOptional": false
     }
   ],
