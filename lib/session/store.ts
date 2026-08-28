@@ -33,15 +33,53 @@ const STAGE_ORDER: PipelineStage[] = [
   "complete",
 ];
 
+import fs from "fs";
+import path from "path";
+
 const globalStore = globalThis as typeof globalThis & {
   __vedaSessions?: Map<string, SessionRecord>;
 };
 
+const TMP_DIR = "/tmp";
+const TMP_SESSIONS_FILE = path.join(TMP_DIR, "vedaSessions.json");
+
 function sessions(): Map<string, SessionRecord> {
   if (!globalStore.__vedaSessions) {
     globalStore.__vedaSessions = new Map();
+    // Try to load persisted lightweight session metadata from /tmp if available
+    try {
+      if (fs.existsSync(TMP_SESSIONS_FILE)) {
+        const raw = fs.readFileSync(TMP_SESSIONS_FILE, "utf-8");
+        const json = JSON.parse(raw);
+        for (const [id, rec] of Object.entries(json)) {
+          globalStore.__vedaSessions.set(id, rec as SessionRecord);
+        }
+      }
+    } catch {
+      // Ignore /tmp read errors
+    }
   }
   return globalStore.__vedaSessions;
+}
+
+function persistToDisk() {
+  try {
+    const obj: Record<string, unknown> = {};
+    for (const [id, rec] of sessions().entries()) {
+      // Store lightweight representation without raw PDF buffers to prevent excessive disk IO
+      obj[id] = {
+        id: rec.id,
+        createdAt: rec.createdAt,
+        status: rec.status,
+        evaluation: rec.evaluation,
+        failure: rec.failure,
+        pageImages: rec.pageImages,
+      };
+    }
+    fs.writeFileSync(TMP_SESSIONS_FILE, JSON.stringify(obj));
+  } catch {
+    // Ignore /tmp write errors
+  }
 }
 
 export function createSessionId(): string {
@@ -57,11 +95,29 @@ export function createSession(): SessionRecord {
     answerPages: [],
   };
   sessions().set(id, record);
+  persistToDisk();
   return record;
 }
 
 export function getSession(id: string): SessionRecord | undefined {
-  return sessions().get(id);
+  let rec = sessions().get(id);
+  if (!rec) {
+    // Try disk lookup
+    try {
+      if (fs.existsSync(TMP_SESSIONS_FILE)) {
+        const raw = fs.readFileSync(TMP_SESSIONS_FILE, "utf-8");
+        const json = JSON.parse(raw);
+        if (json[id]) {
+          rec = json[id] as SessionRecord;
+          rec.answerPages = rec.answerPages || [];
+          sessions().set(id, rec);
+        }
+      }
+    } catch {
+      // Ignore
+    }
+  }
+  return rec;
 }
 
 export function setSessionFiles(
@@ -79,7 +135,11 @@ export function setSessionFiles(
 export function setAnswerPages(id: string, pages: StoredPage[]): SessionRecord {
   const record = mustGet(id);
   record.answerPages = pages;
+  record.pageImages = pages.map(
+    (p) => `data:image/png;base64,${p.bytes.toString("base64")}`,
+  );
   sessions().set(id, record);
+  persistToDisk();
   return record;
 }
 
@@ -91,6 +151,7 @@ export function setSessionStage(
   const record = mustGet(id);
   record.status = buildStatus(id, stage, error);
   sessions().set(id, record);
+  persistToDisk();
   return record.status;
 }
 
@@ -103,6 +164,7 @@ export function setEvaluation(
   record.failure = undefined;
   record.status = buildStatus(id, "complete");
   sessions().set(id, record);
+  persistToDisk();
   return record;
 }
 
@@ -115,17 +177,18 @@ export function setSessionFailure(
   record.evaluation = undefined;
   record.status = buildStatus(id, "failed", failure.summary);
   sessions().set(id, record);
+  persistToDisk();
   return record;
 }
 
 export function getPage(id: string, page: number): StoredPage | undefined {
-  const record = sessions().get(id);
+  const record = getSession(id);
   if (!record) return undefined;
-  return record.answerPages.find((p) => p.page === page);
+  return record.answerPages?.find((p) => p.page === page);
 }
 
 function mustGet(id: string): SessionRecord {
-  const record = sessions().get(id);
+  const record = getSession(id);
   if (!record) throw new Error(`Unknown session: ${id}`);
   return record;
 }

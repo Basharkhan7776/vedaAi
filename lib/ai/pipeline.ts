@@ -23,6 +23,8 @@ import type {
   EvaluationSession,
   GroundingBrief,
   MappedQuestion,
+  PipelineProgressEvent,
+  PipelineStage,
   SessionFailure,
   UnmappedAnswer,
 } from "@/lib/types/evaluation";
@@ -32,13 +34,39 @@ import type {
   ValidateDocumentsResult,
 } from "@/lib/ai/schemas";
 
-export async function runEvaluationPipeline(sessionId: string): Promise<void> {
+export async function runEvaluationPipeline(
+  sessionId: string,
+  onProgress?: (event: PipelineProgressEvent) => void,
+): Promise<{
+  evaluation?: EvaluationSession;
+  failure?: SessionFailure;
+  pageImages?: string[];
+}> {
   PipelineTokenTracker.reset();
+
+  const emitProgress = (
+    stage: PipelineStage,
+    progress: number,
+    stageLabel: string,
+    extra?: Partial<PipelineProgressEvent>,
+  ) => {
+    setSessionStage(sessionId, stage);
+    if (onProgress) {
+      onProgress({
+        type: "stage",
+        sessionId,
+        stage,
+        progress,
+        stageLabel,
+        ...extra,
+      });
+    }
+  };
 
   const session = getSession(sessionId);
   if (!session?.questionPaper || !session.answerSheet) {
     console.error(`❌ [pipeline] Session ${sessionId} missing uploads`);
-    setSessionFailure(sessionId, {
+    const fail: SessionFailure = {
       title: "Missing uploads",
       summary: "Both a question paper and an answer sheet are required.",
       issues: [
@@ -53,8 +81,19 @@ export async function runEvaluationPipeline(sessionId: string): Promise<void> {
         },
       ],
       suggestions: ["Return to Upload and attach both files again."],
-    });
-    return;
+    };
+    setSessionFailure(sessionId, fail);
+    if (onProgress) {
+      onProgress({
+        type: "failure",
+        sessionId,
+        stage: "failed",
+        progress: 100,
+        stageLabel: fail.summary,
+        failure: fail,
+      });
+    }
+    return { failure: fail };
   }
 
   const qpSizeKb = (session.questionPaper.bytes.length / 1024).toFixed(1);
@@ -71,7 +110,11 @@ export async function runEvaluationPipeline(sessionId: string): Promise<void> {
     // STEP 1: Ingest & Rasterize Answer Sheet
     // ------------------------------------------------------------------
     console.log(`⏳ [pipeline] [1/6] Ingesting & rasterizing answer sheet pages...`);
-    setSessionStage(sessionId, "ingest_rasterize");
+    emitProgress(
+      "ingest_rasterize",
+      15,
+      "Ingesting & rendering answer sheet pages…",
+    );
     let pages;
     try {
       pages = await rasterizeAnswerSheet(session.answerSheet);
@@ -83,7 +126,7 @@ export async function runEvaluationPipeline(sessionId: string): Promise<void> {
           ? rasterErr.message
           : "Could not read answer sheet pages";
       console.error(`❌ [pipeline] [1/6] Rasterization failed:`, message);
-      setSessionFailure(sessionId, {
+      const fail: SessionFailure = {
         title: "Answer sheet could not be read",
         summary: message,
         issues: [
@@ -100,15 +143,30 @@ export async function runEvaluationPipeline(sessionId: string): Promise<void> {
         suggestions: [
           "Re-upload a readable scan of the handwritten answer sheet.",
         ],
-      });
-      return;
+      };
+      setSessionFailure(sessionId, fail);
+      if (onProgress) {
+        onProgress({
+          type: "failure",
+          sessionId,
+          stage: "failed",
+          progress: 100,
+          stageLabel: message,
+          failure: fail,
+        });
+      }
+      return { failure: fail };
     }
 
     // ------------------------------------------------------------------
     // STEP 2: Validate Document Context & Compatibility
     // ------------------------------------------------------------------
     console.log(`⏳ [pipeline] [2/6] Validating documents via Gemini AI...`);
-    setSessionStage(sessionId, "validate_documents");
+    emitProgress(
+      "validate_documents",
+      30,
+      "Checking that uploaded files look like a QP and answer sheet…",
+    );
     const validation = await validateDocuments({
       questionPaper: session.questionPaper,
       answerSheet: session.answerSheet,
@@ -125,8 +183,19 @@ export async function runEvaluationPipeline(sessionId: string): Promise<void> {
 
     if (!documentsAreUsable(validation)) {
       console.warn(`⚠️ [pipeline] [2/6] Documents failed usability validation.`);
-      setSessionFailure(sessionId, toSessionFailure(validation));
-      return;
+      const fail = toSessionFailure(validation);
+      setSessionFailure(sessionId, fail);
+      if (onProgress) {
+        onProgress({
+          type: "failure",
+          sessionId,
+          stage: "failed",
+          progress: 100,
+          stageLabel: fail.summary,
+          failure: fail,
+        });
+      }
+      return { failure: fail };
     }
     console.log(`✅ [pipeline] [2/6] Documents validated successfully.`);
 
@@ -134,7 +203,11 @@ export async function runEvaluationPipeline(sessionId: string): Promise<void> {
     // STEP 3: Extract Questions & Overall Paper Metadata
     // ------------------------------------------------------------------
     console.log(`⏳ [pipeline] [3/6] Extracting exam structure, sections & max marks from Question Paper...`);
-    setSessionStage(sessionId, "extract_questions");
+    emitProgress(
+      "extract_questions",
+      45,
+      "Extracting questions & exam structure…",
+    );
     const extracted = await extractQuestions(session.questionPaper);
 
     console.log(`✅ [pipeline] [3/6] Extracted ${extracted.questions.length} questions.`);
@@ -174,7 +247,11 @@ export async function runEvaluationPipeline(sessionId: string): Promise<void> {
 
     if (!skipThinking) {
       console.log(`⏳ [pipeline] [5/6] Running agent thinking & research synthesis...`);
-      setSessionStage(sessionId, "thinking_loop");
+      emitProgress(
+        "thinking_loop",
+        60,
+        "Agent thinking + rubric synthesis…",
+      );
       try {
         grounding = await runGroundedThinkingLoop({ extracted });
         console.log(`✅ [pipeline] [5/6] Grounding synthesized:`, {
@@ -195,7 +272,11 @@ export async function runEvaluationPipeline(sessionId: string): Promise<void> {
     // STEP 6: Match Answers to Questions & Grade
     // ------------------------------------------------------------------
     console.log(`⏳ [pipeline] [6/6] Matching answers to questions & grading via Gemini AI...`);
-    setSessionStage(sessionId, "map_answers");
+    emitProgress(
+      "map_answers",
+      75,
+      "Mapping handwritten answers to questions…",
+    );
     const mapped = await mapAnswersAndGrade(
       extracted.questions,
       extractedAnswers.answers,
@@ -208,7 +289,11 @@ export async function runEvaluationPipeline(sessionId: string): Promise<void> {
     // ------------------------------------------------------------------
     // Finalize Evaluation Session & Accurate Spatial Highlights
     // ------------------------------------------------------------------
-    setSessionStage(sessionId, "grade_feedback");
+    emitProgress(
+      "grade_feedback",
+      90,
+      "Scoring answers & generating AI feedback…",
+    );
     const evaluation = buildEvaluationSession({
       sessionId,
       extracted,
@@ -231,10 +316,28 @@ export async function runEvaluationPipeline(sessionId: string): Promise<void> {
     console.log(`   * Tokens OUT (Candidates) : ${tokenTotals.totalOut.toLocaleString()} tokens`);
     console.log(`   * Total Session Tokens    : ${tokenTotals.grandTotal.toLocaleString()} tokens`);
     console.log(`======================================================\n`);
+
+    const pageDataUrls = pages.map(
+      (p) => `data:image/png;base64,${p.bytes.toString("base64")}`,
+    );
+
+    if (onProgress) {
+      onProgress({
+        type: "complete",
+        sessionId,
+        stage: "complete",
+        progress: 100,
+        stageLabel: "Evaluation complete",
+        evaluation,
+        pageImages: pageDataUrls,
+      });
+    }
+
+    return { evaluation, pageImages: pageDataUrls };
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown pipeline error";
     console.error(`❌ [pipeline] Fatal error in session ${sessionId}:`, message);
-    setSessionFailure(sessionId, {
+    const fail: SessionFailure = {
       title: "Evaluation failed",
       summary: message,
       issues: [
@@ -249,7 +352,19 @@ export async function runEvaluationPipeline(sessionId: string): Promise<void> {
         },
       ],
       suggestions: ["Fix the issue above, then re-upload both files."],
-    });
+    };
+    setSessionFailure(sessionId, fail);
+    if (onProgress) {
+      onProgress({
+        type: "error",
+        sessionId,
+        stage: "error",
+        progress: 0,
+        error: message,
+        failure: fail,
+      });
+    }
+    return { failure: fail };
   }
 }
 

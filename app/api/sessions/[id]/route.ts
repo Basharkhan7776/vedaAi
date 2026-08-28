@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getSession } from "@/lib/session/store";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 export async function GET(
   _request: Request,
@@ -58,7 +59,8 @@ export async function GET(
       ok: true,
       evaluation: session.evaluation,
       status,
-      hasPageImages: session.answerPages.length > 0,
+      hasPageImages: (session.pageImages && session.pageImages.length > 0) || session.answerPages.length > 0,
+      pageImages: session.pageImages,
     });
   }
 

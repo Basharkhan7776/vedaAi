@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { SidebarNav } from "./sidebar-nav";
 import { useSessionStatus, useStartEvaluation } from "@/lib/api/hooks";
+import type { PipelineProgressEvent, SessionStatus } from "@/lib/types/evaluation";
 
 type UploadMeta = {
   name: string;
@@ -68,16 +69,19 @@ export function UploadPage() {
   const [answerSheets, setAnswerSheets] = useState<UploadMeta | null>(null);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [evalError, setEvalError] = useState<string | null>(null);
+  const [liveProgress, setLiveProgress] = useState<SessionStatus | null>(null);
+  const [isStreaming, setIsStreaming] = useState(false);
 
   const startMutation = useStartEvaluation();
   const statusQuery = useSessionStatus(activeSessionId, {
-    enabled: Boolean(activeSessionId),
+    enabled: Boolean(activeSessionId) && !isStreaming,
   });
 
-  const isEvaluating = Boolean(activeSessionId) && !statusQuery.data?.terminal;
-  const evaluationStep = STAGE_TO_STEP[statusQuery.data?.stage ?? "queued"] ?? 0;
+  const effectiveStatus = liveProgress || statusQuery.data;
+  const isEvaluating = isStreaming || (Boolean(activeSessionId) && !effectiveStatus?.terminal);
+  const evaluationStep = STAGE_TO_STEP[effectiveStatus?.stage ?? "queued"] ?? 0;
   const statusLabel =
-    statusQuery.data?.stageLabel ||
+    effectiveStatus?.stageLabel ||
     "Please wait, while we evaluate the answer sheets...";
 
   const isReady = Boolean(questionPaper && answerSheets);
@@ -92,13 +96,14 @@ export function UploadPage() {
     [],
   );
 
-  // When Gemini pipeline finishes (success or failed), open analyzer with session
+  // When Gemini pipeline finishes in legacy fallback mode, open analyzer with session
   useEffect(() => {
+    if (isStreaming) return;
     const status = statusQuery.data;
     if (!activeSessionId || !status?.terminal) return;
     sessionStorage.setItem("veda-session-id", activeSessionId);
     router.push(`/analizer?session=${activeSessionId}`);
-  }, [activeSessionId, statusQuery.data, router]);
+  }, [activeSessionId, statusQuery.data, router, isStreaming]);
 
   const handleLoadSampleData = async () => {
     setEvalError(null);
@@ -152,7 +157,6 @@ export function UploadPage() {
       let asFile = answerSheets.file;
 
       if (useDemo) {
-        // Tiny placeholder PDFs — server demo path or force real if files exist
         qpFile =
           qpFile ||
           new File([new Uint8Array([37, 80, 68, 70])], "demo-qp.pdf", {
@@ -165,19 +169,129 @@ export function UploadPage() {
           });
       }
 
-      const result = await startMutation.mutateAsync({
-        questionPaper: qpFile!,
-        answerSheet: asFile!,
-        demo: useDemo && !questionPaper.file,
+      setIsStreaming(true);
+      setLiveProgress({
+        id: "init",
+        stage: "queued",
+        stageIndex: 0,
+        stageLabel: "Preparing evaluation…",
+        progress: 5,
+        ready: false,
+        terminal: false,
       });
 
-      if (!result.sessionId) {
-        throw new Error(result.error || "No session returned");
+      const formData = new FormData();
+      formData.append("questionPaper", qpFile!);
+      formData.append("answerSheet", asFile!);
+      formData.append("stream", "true");
+      if (useDemo && !questionPaper.file) formData.append("demo", "true");
+
+      const response = await fetch("/api/evaluate", {
+        method: "POST",
+        headers: {
+          Accept: "application/x-ndjson",
+        },
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const errJson = await response.json().catch(() => ({}));
+        throw new Error(errJson.error || `Upload failed (${response.status})`);
       }
-      setActiveSessionId(result.sessionId);
+
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error("ReadableStream not supported by response");
+
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let finalSessionId: string | null = null;
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const event = JSON.parse(line) as PipelineProgressEvent;
+            if (event.sessionId) {
+              finalSessionId = event.sessionId;
+              setActiveSessionId(finalSessionId);
+            }
+
+            if (event.type === "stage") {
+              setLiveProgress({
+                id: event.sessionId || finalSessionId || "session",
+                stage: event.stage || "queued",
+                stageIndex: event.stageIndex || 0,
+                stageLabel: event.stageLabel || "Processing…",
+                progress: event.progress || 10,
+                ready: false,
+                terminal: false,
+              });
+            } else if (event.type === "complete") {
+              setLiveProgress({
+                id: event.sessionId || finalSessionId || "session",
+                stage: "complete",
+                stageIndex: 7,
+                stageLabel: "Evaluation complete",
+                progress: 100,
+                ready: true,
+                terminal: true,
+              });
+              if (typeof window !== "undefined" && event.sessionId) {
+                sessionStorage.setItem("veda-session-id", event.sessionId);
+                sessionStorage.setItem(
+                  `veda-session-data-${event.sessionId}`,
+                  JSON.stringify({
+                    ok: true,
+                    evaluation: event.evaluation,
+                    pageImages: event.pageImages,
+                    hasPageImages: Boolean(event.pageImages?.length),
+                  }),
+                );
+              }
+              router.push(`/analizer?session=${event.sessionId || finalSessionId}`);
+              return;
+            } else if (event.type === "failure") {
+              setLiveProgress({
+                id: event.sessionId || finalSessionId || "session",
+                stage: "failed",
+                stageIndex: 7,
+                stageLabel: event.stageLabel || "Documents could not be mapped",
+                progress: 100,
+                ready: false,
+                terminal: true,
+              });
+              if (typeof window !== "undefined" && event.sessionId) {
+                sessionStorage.setItem("veda-session-id", event.sessionId);
+                sessionStorage.setItem(
+                  `veda-session-data-${event.sessionId}`,
+                  JSON.stringify({
+                    ok: false,
+                    failure: event.failure,
+                    hasPageImages: false,
+                  }),
+                );
+              }
+              router.push(`/analizer?session=${event.sessionId || finalSessionId}`);
+              return;
+            } else if (event.type === "error") {
+              throw new Error(event.error || "Evaluation pipeline error");
+            }
+          } catch (parseErr) {
+            console.error("Stream parse error:", parseErr, line);
+          }
+        }
+      }
     } catch (err) {
       setEvalError(err instanceof Error ? err.message : "Failed to start evaluation");
+      setIsStreaming(false);
       setActiveSessionId(null);
+      setLiveProgress(null);
     }
   };
 

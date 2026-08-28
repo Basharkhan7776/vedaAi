@@ -14,6 +14,7 @@ interface DocumentViewerProps {
   totalPages?: number;
   sessionId?: string | null;
   pdfUrl?: string;
+  pageImages?: string[];
 }
 
 function regionsForQuestion(q: MappedQuestion) {
@@ -29,13 +30,17 @@ export function DocumentViewer({
   onPageChange,
   totalPages = 4,
   sessionId = null,
+  pageImages,
 }: DocumentViewerProps) {
   const [zoomLevel, setZoomLevel] = useState<number>(100);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
 
-  const pageImageUrl = sessionId
-    ? sessionPageUrl(sessionId, currentPage)
-    : null;
+  const pageImageUrl =
+    pageImages && pageImages[currentPage - 1]
+      ? pageImages[currentPage - 1]
+      : sessionId
+        ? sessionPageUrl(sessionId, currentPage)
+        : null;
 
   const overlays = useMemo(
     () =>

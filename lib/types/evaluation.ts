@@ -170,6 +170,19 @@ export type StoredFile = {
   bytes: Buffer;
 };
 
+export type PipelineProgressEvent = {
+  type: "stage" | "complete" | "failure" | "error";
+  sessionId: string;
+  stage?: PipelineStage;
+  stageIndex?: number;
+  stageLabel?: string;
+  progress?: number;
+  error?: string;
+  evaluation?: EvaluationSession;
+  failure?: SessionFailure;
+  pageImages?: string[];
+};
+
 export type SessionRecord = {
   id: string;
   createdAt: number;
@@ -179,4 +192,5 @@ export type SessionRecord = {
   answerPages: StoredPage[];
   evaluation?: EvaluationSession;
   failure?: SessionFailure;
+  pageImages?: string[];
 };

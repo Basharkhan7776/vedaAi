@@ -34,8 +34,20 @@ export function AnalyzerPage() {
     return null;
   }, [sessionIdFromQuery]);
 
+  // Read cached session data from client storage if available
+  const cachedData = useMemo(() => {
+    if (typeof window === "undefined" || !sessionId) return null;
+    try {
+      const raw = sessionStorage.getItem(`veda-session-data-${sessionId}`);
+      if (raw) return JSON.parse(raw);
+    } catch {
+      // Ignore
+    }
+    return null;
+  }, [sessionId]);
+
   const sessionQuery = useEvaluationSession(sessionId, {
-    enabled: Boolean(sessionId),
+    enabled: Boolean(sessionId) && !cachedData?.evaluation,
   });
 
   const [selectedQuestionId, setSelectedQuestionId] = useState<string>("q1");
@@ -49,21 +61,34 @@ export function AnalyzerPage() {
 
   const isDemoBrowse = !sessionId;
   const payload = sessionQuery.data;
+  
   const evaluation: EvaluationSession | null = isDemoBrowse
     ? SAMPLE_EVALUATION
     : payload && payload.ok
       ? (payload.evaluation as EvaluationSession)
-      : null;
+      : cachedData && cachedData.ok && cachedData.evaluation
+        ? (cachedData.evaluation as EvaluationSession)
+        : null;
+
   const failure: SessionFailure | null =
     !isDemoBrowse && payload && !payload.ok && payload.failure
       ? payload.failure
-      : null;
+      : cachedData && !cachedData.ok && cachedData.failure
+        ? (cachedData.failure as SessionFailure)
+        : null;
+
+  const pageImages: string[] | undefined =
+    cachedData?.pageImages || (payload && "pageImages" in payload ? (payload as { pageImages?: string[] }).pageImages : undefined);
+
   const hasPageImages =
-    !isDemoBrowse && payload && "hasPageImages" in payload
+    Boolean(pageImages?.length) ||
+    (!isDemoBrowse && payload && "hasPageImages" in payload
       ? Boolean(payload.hasPageImages)
-      : false;
+      : false);
+
   const isLoading =
     Boolean(sessionId) &&
+    !cachedData &&
     (sessionQuery.isLoading ||
       (payload && !payload.ok && "pending" in payload && payload.pending) ||
       (payload && !payload.ok && !payload.failure && !payload.status?.terminal));
@@ -207,7 +232,12 @@ export function AnalyzerPage() {
         )}
 
         {!isLoading && failure && (
-          <FailedPanel failure={failure} sessionId={sessionId} hasPageImages={hasPageImages} />
+          <FailedPanel
+            failure={failure}
+            sessionId={sessionId}
+            hasPageImages={hasPageImages}
+            pageImages={pageImages}
+          />
         )}
 
         {!isLoading && !failure && evaluation && (
@@ -316,6 +346,7 @@ export function AnalyzerPage() {
                   onPageChange={setCurrentPage}
                   totalPages={evaluation.totalPages}
                   sessionId={hasPageImages ? sessionId : null}
+                  pageImages={pageImages}
                 />
               </div>
             </div>
@@ -340,10 +371,12 @@ function FailedPanel({
   failure,
   sessionId,
   hasPageImages,
+  pageImages,
 }: {
   failure: SessionFailure;
   sessionId: string | null;
   hasPageImages?: boolean;
+  pageImages?: string[];
 }) {
   const [currentPage, setCurrentPage] = useState<number>(1);
 
@@ -445,6 +478,7 @@ function FailedPanel({
           onPageChange={setCurrentPage}
           totalPages={1}
           sessionId={hasPageImages ? sessionId : null}
+          pageImages={pageImages}
         />
       </div>
     </div>

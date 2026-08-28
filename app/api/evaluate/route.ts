@@ -8,10 +8,11 @@ import {
   setSessionFailure,
   setSessionStage,
 } from "@/lib/session/store";
-import type { StoredFile } from "@/lib/types/evaluation";
+import type { PipelineProgressEvent, StoredFile } from "@/lib/types/evaluation";
 import { SAMPLE_EVALUATION } from "@/components/page/mock-data";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
 export async function POST(request: Request) {
@@ -22,6 +23,10 @@ export async function POST(request: Request) {
     const demo = form.get("demo") === "true" || form.get("demo") === "1";
     const forceFail =
       form.get("forceFail") === "true" || form.get("forceFail") === "1";
+    const wantsStream =
+      form.get("stream") === "true" ||
+      form.get("stream") === "1" ||
+      request.headers.get("accept")?.includes("application/x-ndjson");
 
     if (!(questionPaper instanceof File) || !(answerSheet instanceof File)) {
       return NextResponse.json(
@@ -31,8 +36,66 @@ export async function POST(request: Request) {
     }
 
     const session = createSession();
+    const qp = await toStoredFile(questionPaper);
+    const ans = await toStoredFile(answerSheet);
+    setSessionFiles(session.id, qp, ans);
 
-    if (demo || !hasGeminiKey()) {
+    const isDemoMode = demo || !hasGeminiKey();
+
+    // If client requested active streaming (or modern web UI)
+    if (wantsStream) {
+      const encoder = new TextEncoder();
+      const stream = new TransformStream();
+      const writer = stream.writable.getWriter();
+
+      const sendEvent = async (event: PipelineProgressEvent) => {
+        try {
+          await writer.write(encoder.encode(JSON.stringify(event) + "\n"));
+        } catch {
+          // Client disconnected
+        }
+      };
+
+      // Run pipeline synchronously inside active serverless execution context
+      (async () => {
+        try {
+          if (isDemoMode) {
+            await runDemoPipeline(session.id, { forceFail, onProgress: sendEvent });
+          } else {
+            await runEvaluationPipeline(session.id, sendEvent);
+          }
+        } catch (err) {
+          const message =
+            err instanceof Error ? err.message : "Evaluation failed unexpectedly";
+          await sendEvent({
+            type: "error",
+            sessionId: session.id,
+            stage: "error",
+            progress: 0,
+            error: message,
+          });
+        } finally {
+          try {
+            await writer.close();
+          } catch {
+            // Stream already closed
+          }
+        }
+      })();
+
+      return new Response(stream.readable, {
+        headers: {
+          "Content-Type": "application/x-ndjson; charset=utf-8",
+          "Cache-Control": "no-cache, no-transform",
+          "Connection": "keep-alive",
+          "X-Accel-Buffering": "no",
+          "X-Session-Id": session.id,
+        },
+      });
+    }
+
+    // Fallback for non-streaming clients: trigger background and return sessionId
+    if (isDemoMode) {
       setSessionStage(session.id, "ingest_rasterize");
       void runDemoPipeline(session.id, { forceFail });
       return NextResponse.json({
@@ -47,12 +110,7 @@ export async function POST(request: Request) {
       });
     }
 
-    const qp = await toStoredFile(questionPaper);
-    const ans = await toStoredFile(answerSheet);
-    setSessionFiles(session.id, qp, ans);
-
     void runEvaluationPipeline(session.id);
-
     return NextResponse.json({ sessionId: session.id, demo: false });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Upload failed";
@@ -81,29 +139,42 @@ function guessMime(name: string) {
 
 async function runDemoPipeline(
   sessionId: string,
-  opts: { forceFail?: boolean } = {},
+  opts: {
+    forceFail?: boolean;
+    onProgress?: (event: PipelineProgressEvent) => Promise<void>;
+  } = {},
 ) {
   const stages = [
-    "ingest_rasterize",
-    "validate_documents",
-    "extract_questions",
-    "thinking_loop",
-    "map_answers",
-    "grade_feedback",
+    { stage: "ingest_rasterize", progress: 15, label: "Ingesting & rendering answer sheet pages…" },
+    { stage: "validate_documents", progress: 30, label: "Checking that uploaded files look like a QP and answer sheet…" },
+    { stage: "extract_questions", progress: 45, label: "Extracting questions from the question paper…" },
+    { stage: "thinking_loop", progress: 60, label: "Agent thinking + Google Search grounding…" },
+    { stage: "map_answers", progress: 75, label: "Mapping handwritten answers to questions…" },
+    { stage: "grade_feedback", progress: 90, label: "Scoring answers & generating AI feedback…" },
   ] as const;
 
-  for (const stage of stages) {
-    setSessionStage(sessionId, stage);
-    await sleep(500);
-    if (opts.forceFail && stage === "validate_documents") {
-      setSessionFailure(sessionId, {
+  for (const item of stages) {
+    setSessionStage(sessionId, item.stage);
+    if (opts.onProgress) {
+      await opts.onProgress({
+        type: "stage",
+        sessionId,
+        stage: item.stage,
+        progress: item.progress,
+        stageLabel: item.label,
+      });
+    }
+    await sleep(400);
+
+    if (opts.forceFail && item.stage === "validate_documents") {
+      const failure = {
         title: "We couldn’t map these documents",
         summary:
           "The file uploaded as the question paper does not look like an exam paper, and the answer sheet appears unrelated.",
         issues: [
           {
-            file: "questionPaper",
-            code: "not_question_paper",
+            file: "questionPaper" as const,
+            code: "not_question_paper" as const,
             message:
               "This PDF looks like a generic document (not a numbered exam question paper).",
             suggestions: [
@@ -112,8 +183,8 @@ async function runDemoPipeline(
             ],
           },
           {
-            file: "answerSheet",
-            code: "wrong_subject_or_mismatch",
+            file: "answerSheet" as const,
+            code: "wrong_subject_or_mismatch" as const,
             message:
               "The answer sheet content does not appear to match the uploaded question paper.",
             suggestions: [
@@ -127,12 +198,23 @@ async function runDemoPipeline(
           "Attach a real question paper + matching student answer sheet",
           "Run Start Mapping again",
         ],
-      });
+      };
+      setSessionFailure(sessionId, failure);
+      if (opts.onProgress) {
+        await opts.onProgress({
+          type: "failure",
+          sessionId,
+          stage: "failed",
+          progress: 100,
+          stageLabel: failure.summary,
+          failure,
+        });
+      }
       return;
     }
   }
 
-  setEvaluation(sessionId, {
+  const evaluation = {
     ...SAMPLE_EVALUATION,
     id: sessionId,
     questions: SAMPLE_EVALUATION.questions.map((q) => ({
@@ -144,7 +226,20 @@ async function runDemoPipeline(
       ],
     })),
     unmappedAnswers: [],
-  } as import("@/lib/types/evaluation").EvaluationSession);
+  } as import("@/lib/types/evaluation").EvaluationSession;
+
+  setEvaluation(sessionId, evaluation);
+
+  if (opts.onProgress) {
+    await opts.onProgress({
+      type: "complete",
+      sessionId,
+      stage: "complete",
+      progress: 100,
+      stageLabel: "Evaluation complete",
+      evaluation,
+    });
+  }
 }
 
 function sleep(ms: number) {
