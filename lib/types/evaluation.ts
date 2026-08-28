@@ -16,7 +16,8 @@ export type QuestionStatus =
   | "correct"
   | "partial"
   | "incorrect"
-  | "unanswered";
+  | "unanswered"
+  | "optional_skipped";
 
 export type RubricStep = {
   step: number;
@@ -24,7 +25,17 @@ export type RubricStep = {
   marks: number;
   awarded: number;
   status: "full" | "partial" | "none";
-  note?: string;
+  note?: string | null;
+};
+
+export type SectionInfo = {
+  name: string;
+  title?: string | null;
+  questionRange?: string | null;
+  marksPerQuestion?: number | null;
+  totalMarks?: number | null;
+  isCompulsory?: boolean;
+  instructions?: string | null;
 };
 
 export type MappedQuestion = {
@@ -40,13 +51,16 @@ export type MappedQuestion = {
   studentAnswerTranscription: string;
   modelAnswer: string;
   aiRemarks: string;
-  teacherRemarks?: string;
+  teacherRemarks?: string | null;
   confidence: number;
   rubric: RubricStep[];
   regions: AnswerRegion[];
   /** Derived from regions[0] for DocumentViewer compatibility */
   page: number;
   boundingBox: BoxPct;
+  section?: string | null;
+  isOptional?: boolean;
+  choiceGroup?: string | null;
 };
 
 export type UnmappedAnswer = {
@@ -87,6 +101,10 @@ export type EvaluationSession = {
   questions: MappedQuestion[];
   unmappedAnswers: UnmappedAnswer[];
   grounding?: GroundingBrief;
+  totalPaperMarks?: number | null;
+  duration?: string | null;
+  sections?: SectionInfo[] | null;
+  generalInstructions?: string[] | null;
 };
 
 export type DocumentIssueCode =

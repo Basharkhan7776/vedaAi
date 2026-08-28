@@ -66,23 +66,39 @@ async function main() {
   if (updated.evaluation) {
     const evalData = updated.evaluation;
     console.log("\n✅ EVALUATION SUCCESSFUL!");
-    console.log(`📌 Title        : ${evalData.title}`);
-    console.log(`📌 Subject      : ${evalData.subject}`);
-    console.log(`📌 Grade        : ${evalData.grade}`);
-    console.log(`📌 Student      : ${evalData.studentName} (${evalData.rollNumber || "No Roll #"})`);
-    console.log(`📌 Total Marks  : ${evalData.totalMarks} / ${evalData.maxMarks} (${evalData.percentage}%)`);
-    console.log(`📌 Grade Badge  : ${evalData.gradeBadge}`);
-    console.log(`📌 Total Pages  : ${evalData.totalPages}`);
-    console.log(`📌 Questions (#): ${evalData.questions.length}`);
-    console.log(`📌 Unmapped (#) : ${evalData.unmappedAnswers?.length || 0}`);
+    console.log(`📌 Title             : ${evalData.title}`);
+    console.log(`📌 Subject           : ${evalData.subject}`);
+    console.log(`📌 Grade             : ${evalData.grade}`);
+    console.log(`📌 Duration          : ${evalData.duration || "N/A"}`);
+    console.log(`📌 Total Paper Marks : ${evalData.totalPaperMarks ?? evalData.maxMarks}`);
+    console.log(`📌 Student           : ${evalData.studentName} (${evalData.rollNumber || "No Roll #"})`);
+    console.log(`📌 Score Awarded     : ${evalData.totalMarks} / ${evalData.maxMarks} (${evalData.percentage}%)`);
+    console.log(`📌 Grade Badge       : ${evalData.gradeBadge}`);
+    console.log(`📌 Total Pages       : ${evalData.totalPages}`);
+    console.log(`📌 Questions (#)     : ${evalData.questions.length}`);
+    console.log(`📌 Unmapped (#)      : ${evalData.unmappedAnswers?.length || 0}`);
+
+    if (evalData.sections && evalData.sections.length > 0) {
+      console.log("\n--- SECTION BREAKDOWN ---");
+      evalData.sections.forEach((sec) => {
+        console.log(`📑 [${sec.name}] ${sec.title || ''} | Questions: ${sec.questionRange || 'N/A'} | Marks/Q: ${sec.marksPerQuestion ?? 'N/A'} | Section Total: ${sec.totalMarks ?? 'N/A'}m | Compulsory: ${sec.isCompulsory}`);
+      });
+    }
+
+    if (evalData.generalInstructions && evalData.generalInstructions.length > 0) {
+      console.log("\n--- GENERAL INSTRUCTIONS ---");
+      evalData.generalInstructions.forEach((inst, i) => console.log(`${i + 1}. ${inst}`));
+    }
 
     console.log("\n--- DETAILED QUESTIONS BREAKDOWN ---");
     evalData.questions.forEach((q, idx) => {
       const boxStr = q.regions.map(r => `P${r.page}:[x=${r.box.x}%, y=${r.box.y}%, w=${r.box.width}%, h=${r.box.height}%]`).join(" | ");
-      console.log(`\n[#${idx + 1}] Question ${q.number}: "${q.questionText.slice(0, 70).replace(/\n/g, ' ')}..."`);
+      const secPrefix = q.section ? `[${q.section}] ` : "";
+      const optPrefix = q.isOptional ? `(Optional Choice: ${q.choiceGroup || 'OR'}) ` : "";
+      console.log(`\n[#${idx + 1}] ${secPrefix}Question ${q.number} ${optPrefix}: "${q.questionText.slice(0, 70).replace(/\n/g, ' ')}..."`);
       console.log(`     Status       : [${q.status.toUpperCase()}]`);
       console.log(`     Score        : ${q.marksObtained} / ${q.maxMarks}`);
-      console.log(`     Regions      : ${q.regions.length > 0 ? boxStr : "None (Unanswered)"}`);
+      console.log(`     Regions      : ${q.regions.length > 0 ? boxStr : "None (Unanswered / Skipped)"}`);
       console.log(`     Student Ans  : "${q.studentAnswer.slice(0, 80).replace(/\n/g, ' ')}..."`);
       console.log(`     AI Feedback  : "${q.aiRemarks}"`);
     });

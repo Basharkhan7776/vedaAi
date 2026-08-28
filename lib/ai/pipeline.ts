@@ -128,16 +128,32 @@ export async function runEvaluationPipeline(sessionId: string): Promise<void> {
     console.log(`✅ [pipeline] [2/6] Documents validated successfully.`);
 
     // ------------------------------------------------------------------
-    // STEP 3: Extract Questions & Max Marks (maxMarks > 0 guaranteed)
+    // STEP 3: Extract Questions & Overall Paper Metadata
     // ------------------------------------------------------------------
-    console.log(`⏳ [pipeline] [3/6] Extracting questions & max marks from Question Paper...`);
+    console.log(`⏳ [pipeline] [3/6] Extracting exam structure, sections & max marks from Question Paper...`);
     setSessionStage(sessionId, "extract_questions");
     const extracted = await extractQuestions(session.questionPaper);
 
     console.log(`✅ [pipeline] [3/6] Extracted ${extracted.questions.length} questions.`);
-    console.log(`   📌 Header: "${extracted.title || 'Exam Paper'}" | Subject: "${extracted.subject || 'General'}" | Grade: "${extracted.grade || 'N/A'}"`);
+    console.log(`   📌 Title: "${extracted.title || 'Exam Paper'}" | Subject: "${extracted.subject || 'General'}" | Grade: "${extracted.grade || 'N/A'}"`);
+    if (extracted.totalPaperMarks) {
+      console.log(`   🏆 Total Paper Max Marks: ${extracted.totalPaperMarks} | Duration: ${extracted.duration || 'N/A'}`);
+    }
+    if (extracted.sections && extracted.sections.length > 0) {
+      console.log(`   📑 Sections (${extracted.sections.length}):`);
+      extracted.sections.forEach((sec) => {
+        console.log(`      * [${sec.name}] ${sec.title || ''} (Range: ${sec.questionRange || 'N/A'}, Marks/Q: ${sec.marksPerQuestion ?? 'N/A'}, Total: ${sec.totalMarks ?? 'N/A'}m, Compulsory: ${sec.isCompulsory})`);
+      });
+    }
+    if (extracted.generalInstructions && extracted.generalInstructions.length > 0) {
+      console.log(`   📋 General Instructions (${extracted.generalInstructions.length}):`);
+      extracted.generalInstructions.forEach((inst, i) => console.log(`      ${i + 1}. ${inst}`));
+    }
+
     extracted.questions.forEach((q) => {
-      console.log(`   👉 Q${q.number} (${q.maxMarks} max marks): ${q.questionText.slice(0, 75).replace(/\n/g, ' ')}...`);
+      const secTag = q.section ? `[${q.section}] ` : "";
+      const optTag = q.isOptional ? `(Optional Choice: ${q.choiceGroup || 'OR'}) ` : "";
+      console.log(`   👉 ${secTag}Q${q.number} (${q.maxMarks} max marks) ${optTag}: ${q.questionText.slice(0, 70).replace(/\n/g, ' ')}...`);
     });
 
     // ------------------------------------------------------------------
@@ -314,12 +330,14 @@ function buildEvaluationSession(args: {
 
   const questions: MappedQuestion[] = extracted.questions.map((q, index) => {
     const hit = byNumber.get(normalizeNumber(q.number));
-    const maxMarks = Math.max(1, hit?.maxMarks || q.maxMarks || 1);
+    const maxMarks = Math.max(0.25, hit?.maxMarks || q.maxMarks || 1);
     const regions = (hit?.regions ?? []).map(toRegion);
     const first = regions[0];
     const status = hit?.status ?? "unanswered";
     const marksObtained =
-      status === "unanswered" ? 0 : Math.min(maxMarks, hit?.marksObtained ?? 0);
+      status === "unanswered" || status === "optional_skipped"
+        ? 0
+        : Math.min(maxMarks, hit?.marksObtained ?? 0);
     const transcription = hit?.studentAnswer ?? "";
 
     return {
@@ -336,12 +354,19 @@ function buildEvaluationSession(args: {
       modelAnswer: hit?.modelAnswer ?? "",
       aiRemarks:
         hit?.aiRemarks ||
-        (status === "unanswered" ? "No answer found on the sheet." : ""),
+        (status === "optional_skipped"
+          ? "Alternative choice attempted."
+          : status === "unanswered"
+            ? "No answer found on the sheet."
+            : ""),
       confidence: hit?.confidence ?? (status === "unanswered" ? 0 : 85),
       rubric: [],
       regions,
       page: first?.page ?? 1,
       boundingBox: first?.box ?? emptyBox(),
+      section: q.section,
+      isOptional: q.isOptional,
+      choiceGroup: q.choiceGroup,
     };
   });
 
@@ -353,11 +378,24 @@ function buildEvaluationSession(args: {
     }),
   );
 
-  // Synthesize fallback percentage boxes if Gemini omitted box_2d
   const withBoxes = applyFallbackRegions(questions);
-
   const totalMarks = withBoxes.reduce((s, q) => s + q.marksObtained, 0);
-  const maxMarks = withBoxes.reduce((s, q) => s + q.maxMarks, 0) || 1;
+
+  // Derive maximum marks from printed paper header (e.g. 80, 100, 150),
+  // or by summing compulsory questions + 1 choice per choiceGroup.
+  let maxMarks = extracted.totalPaperMarks;
+  if (!maxMarks || maxMarks <= 0) {
+    const choiceGroupsSeen = new Set<string>();
+    maxMarks = withBoxes.reduce((s, q) => {
+      if (q.isOptional && q.choiceGroup) {
+        if (choiceGroupsSeen.has(q.choiceGroup)) return s;
+        choiceGroupsSeen.add(q.choiceGroup);
+        return s + q.maxMarks;
+      }
+      return s + (q.isOptional ? 0 : q.maxMarks);
+    }, 0);
+  }
+  maxMarks = Math.max(1, maxMarks);
   const percentage = Number(((totalMarks / maxMarks) * 100).toFixed(1));
 
   return {
@@ -380,6 +418,10 @@ function buildEvaluationSession(args: {
     questions: withBoxes,
     unmappedAnswers,
     grounding,
+    totalPaperMarks: extracted.totalPaperMarks ?? maxMarks,
+    duration: extracted.duration,
+    sections: extracted.sections,
+    generalInstructions: extracted.generalInstructions,
   };
 }
 
@@ -387,6 +429,7 @@ function applyFallbackRegions(questions: MappedQuestion[]): MappedQuestion[] {
   const needing = questions.filter(
     (q) =>
       q.status !== "unanswered" &&
+      q.status !== "optional_skipped" &&
       (q.regions.length === 0 ||
         (!q.boundingBox.width && !q.boundingBox.height)),
   );
@@ -398,6 +441,7 @@ function applyFallbackRegions(questions: MappedQuestion[]): MappedQuestion[] {
   return questions.map((q) => {
     if (
       q.status === "unanswered" ||
+      q.status === "optional_skipped" ||
       (q.regions.length > 0 && (q.boundingBox.width || q.boundingBox.height))
     ) {
       return q;

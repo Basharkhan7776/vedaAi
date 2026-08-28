@@ -1,294 +1,169 @@
-# Veda AI — Agent & Project Guide
+# Veda AI: Project Guide
 
-Hiring assignment clone: **AI Assessment Extraction & Answer Mapping**.
-A teacher uploads a question paper + one handwritten answer sheet; the app extracts questions, maps answers, highlights regions on the sheet, and (optionally) grades with feedback.
+## Purpose
 
-Follow the Figma design closely. Evaluate accuracy of extraction, mapping, highlights, and edge-case handling.
+Veda AI is a Next.js hiring-assignment prototype for evaluating one student's handwritten exam submission against one question paper. A teacher uploads both documents, the server extracts questions and handwritten answers with Gemini, maps answers to questions, grades them, and shows the answer-sheet regions that support each result.
 
----
+The essential user outcome is simple: for every printed question, show whether it was answered, the score and feedback, and the exact place on the scanned answer sheet where the answer was found.
 
-## Product goal
+This is an in-memory demo application. It has no authentication, database, multi-student batch workflow, or persistent file storage.
 
-A teacher should upload a question paper and answer sheet and quickly understand:
+## Current State
 
-- Which question was answered
-- Where the answer is on the sheet (exact highlighted region)
-- Which questions were left unanswered
-- (Bonus) marks, correct/partial/incorrect, AI feedback, summary
+The end-to-end upload, polling, session, Gemini, rasterization, and analyzer paths are present. The app works in two modes:
 
-**Core flow:** Question Extraction → Answer Extraction → Answer Mapping → Grading/Feedback
+- **Gemini mode:** used when `GEMINI_API_KEY` is set and the upload is not forced into demo mode.
+- **Demo mode:** used when no Gemini key is available, or when the request contains `demo=true`. It returns `SAMPLE_EVALUATION` after progressing through the same visible stages.
 
----
+The guide intentionally describes what is in the repository now, rather than a proposed architecture. See [Known Gaps](#known-gaps-and-risks) before expanding the app.
 
-## Non-goals (v1)
+## Tech Stack
 
-- Authentication / multi-tenant accounts
-- Database persistence (in-memory sessions only)
-- Batch grading of many students in one run (assignment: **one** answer sheet)
-- Provider-agnostic AI adapter (Gemini only)
-- HTML Canvas or PDF.js annotation engines for highlights
+| Area | Current implementation |
+| --- | --- |
+| App | Next.js 16 App Router, React 19, TypeScript |
+| Styling | Tailwind CSS v4 and local Bricolage Grotesque font |
+| UI primitives | shadcn components plus custom page components |
+| Client data | Axios and TanStack Query |
+| AI | `@google/genai`; Gemini only, server-side |
+| PDF/image ingest | `pdf-to-img`; answer PDFs are rasterized to PNG |
+| Storage | process-local `Map` attached to `globalThis` |
+| Runtime | Node.js route handlers; Bun is the configured package manager |
 
----
+Do not expose Gemini keys to client components. Do not add a different model provider unless the task explicitly requires it.
 
-## Locked technical decisions
+## User Flow
 
-| Decision | Choice | Why |
-|----------|--------|-----|
-| Framework | **Next.js** App Router (this repo) | Recommended by assignment; UI already started |
-| Client data | **Axios** + **TanStack Query** (`lib/api/*`, `QueryProvider`) | Upload mutation + status/session polling; Gemini stays server-side |
-| AI | **Google Gemini only** (`@google/genai`) | Native PDF + image input; structured JSON; free tier; trained `box_2d` |
-| File host for model | **None required** | Inline base64 or Gemini Files API (Google temp ~48h). No S3/Cloudinary |
-| Highlights | **CSS absolute % overlays** on rasterized page `<img>` | Matches existing `DocumentViewer`; easy click sync; no Canvas |
-| Storage | **In-memory `Map`** | Assignment allows it; no DB |
-| Auth | None | Assignment |
+1. `/` shows the two-file upload form. It accepts one question paper and one answer sheet (`.pdf`, `.png`, `.jpg`, `.jpeg`).
+2. Clicking **Start Mapping** posts multipart form data to `POST /api/evaluate`.
+3. The client polls `GET /api/sessions/:id/status` every 800 ms and renders stage-based progress.
+4. When a session becomes terminal, the client stores its id in `sessionStorage` and navigates to `/analizer?session=:id`.
+5. `/analizer` polls `GET /api/sessions/:id` until it receives either a completed evaluation or a contextual failure.
+6. Selecting a question selects it in the list, changes to its first detected page, and emphasizes its region. Clicking an overlay selects the corresponding question.
 
-### Why Gemini (vs other providers)
+Opening `/analizer` without a session id is an intentional browse-only sample-data view. A real session must never silently fall back to sample data.
 
-- **PDF:** Gemini accepts `application/pdf` inline or via Files API. Other providers usually force PDF→images and often a **public URL**, which pushes you toward Cloudinary/S3.
-- **Images:** Same path for scanned sheets / photo uploads.
-- **Boxes:** Object detection returns `box_2d: [ymin, xmin, ymax, xmax]` normalized to **0–1000**. Convert to CSS percentages for overlays.
-- **Caveat:** Spatial precision on *raw PDFs* is weaker (Google notes this). For **answer highlighting**, always run detection on **rasterized page images**, not on the PDF bytes alone.
+## Routes and API Contract
 
-### Hybrid ingest strategy
+| Route | Role |
+| --- | --- |
+| `/` | Upload page via `components/page/upload-page.tsx` |
+| `/analizer` | Analysis UI via `components/page/analyzer-page.tsx` (spelling is intentionally retained) |
+| `POST /api/evaluate` | Starts a session from `questionPaper` and `answerSheet` multipart files |
+| `GET /api/sessions/:id/status` | Returns `SessionStatus` for upload progress polling |
+| `GET /api/sessions/:id` | Returns pending (`202`), completed evaluation, or `SessionFailure` |
+| `GET /api/sessions/:id/pages/:page` | Serves a stored rasterized answer page |
 
-1. **Question paper** → send PDF/images to Gemini for ordered question list (native PDF OK; no QP highlights required).
-2. **Answer sheet** → rasterize pages in our app → send page images to Gemini for transcription + `box_2d` + question mapping.
-3. Multi-page answers → `regions: [{ page, box }, ...]`.
+`POST /api/evaluate` also understands `demo=true` and `forceFail=true`. `forceFail` exists to demonstrate the document-validation failure state.
 
----
+## Server Pipeline
 
-## Highlighting (no Canvas)
+`lib/ai/pipeline.ts` runs the live evaluation asynchronously after the POST route returns a session id:
 
-Existing UI already draws overlays from percentage boxes in `components/page/document-viewer.tsx`.
+1. **Ingest/rasterize:** `lib/pdf/rasterize.ts` turns an answer PDF into page PNGs, or retains a single image upload as page 1. The resulting buffers stay in the session store.
+2. **Validate documents:** Gemini checks that the first file is an exam paper, the second is a handwritten answer sheet, and that they look compatible. Invalid documents become `SessionFailure` rather than an unhelpful generic error.
+3. **Extract questions:** Gemini reads the question paper and returns an ordered list. Printed labels, including sub-parts such as `11(a)`, must remain separate entries and retain their original strings.
+4. **Extract handwritten answers:** Gemini reads rasterized answer pages and returns transcription, visible answer label, page number, and normalized `box_2d` coordinates for each answer section.
+5. **Optional grounding:** `lib/ai/thinking-loop.ts` derives grading guidance. It only uses Gemini's Google Search tool when `ENABLE_GOOGLE_SEARCH=true`; failures here do not stop grading. `SKIP_THINKING_LOOP=true` skips this stage.
+6. **Map and grade:** Gemini matches extracted handwritten content to question labels and content, emits per-question regions and marks, and emits unmatched answer regions.
+7. **Finalize:** the pipeline converts model output into `EvaluationSession`, calculates totals, and completes the session.
 
-**Gemini → CSS:**
+The public progress state exposes `ingest_rasterize`, `validate_documents`, `extract_questions`, `thinking_loop`, `map_answers`, and `grade_feedback`. Handwriting extraction currently occurs internally between question extraction and optional grounding; it has no separate public stage.
 
-```
-box_2d = [ymin, xmin, ymax, xmax]   // integers 0..1000
-x      = xmin / 10                  // %
+## Data Model and Geometry
+
+Canonical shared types live in `lib/types/evaluation.ts`:
+
+- `EvaluationSession` is the completed response model.
+- `MappedQuestion` contains the original `number`, score, status, text, feedback, and `regions`.
+- `AnswerRegion` has a 1-based `page` and a percentage box.
+- `UnmappedAnswer` represents a detected answer region which did not map to a question.
+- `SessionStatus` and `SessionFailure` model polling and contextual error states.
+
+Gemini uses `box_2d = [ymin, xmin, ymax, xmax]`, normalized from 0 to 1000. Only `lib/geometry/box.ts` should convert it to CSS percentage geometry:
+
+```text
+x      = xmin / 10
 y      = ymin / 10
 width  = (xmax - xmin) / 10
 height = (ymax - ymin) / 10
 ```
 
-Helpers live in `lib/geometry/box.ts`. Never hand-roll axis order in components.
+`page` and `boundingBox` on `MappedQuestion` are compatibility fields derived from the first region. New code should use `regions`, which supports multi-page answers. Do not hand-roll box axis order in a component.
 
-**Interaction:**
+## UI Structure
 
-- Click question card → select id, jump to first region’s page, emphasize box
-- Click box → select that question
-- Empty `regions` → unanswered
-- Orphan sheet regions → `unmappedAnswers[]` with their own boxes
+| Component | Responsibility |
+| --- | --- |
+| `components/page/upload-page.tsx` | File picking, starting evaluation, status polling, redirect to analyzer |
+| `components/page/analyzer-page.tsx` | Session loading/failure handling, question selection, desktop/mobile split layout |
+| `components/page/document-viewer.tsx` | Raster-page image, page controls, zoom, and CSS absolute overlays |
+| `components/page/question-card.tsx` | Question score and expandable AI feedback |
+| `components/page/mock-data.ts` | `SAMPLE_EVALUATION` and legacy UI interfaces for demo compatibility |
+| `components/providers/query-provider.tsx` | Shared TanStack Query client |
 
-Do **not** introduce Canvas unless product later needs freehand segmentation masks.
+Highlights must remain CSS absolute overlays over the rasterized `<img>`. Canvas and PDF annotation engines are not part of this version. Keep non-selected overlay fills subtle; selected and hovered regions may use stronger emphasis.
 
----
+## Important Implementation Rules
 
-## Data contracts
+1. Reuse the existing shell, shadcn primitives, and page-level components. Do not replace the design wholesale.
+2. Keep Gemini calls in route handlers or server-only modules under `lib/ai`.
+3. Send the question paper to Gemini as its native file; use rasterized images for answer-sheet spatial detection.
+4. Preserve every printed question in order, including labeled sub-parts and visible mark allocations.
+5. Map by visible labels and answer content, not sheet order alone. Answers may be written out of order or span pages.
+6. An empty `regions` array means unanswered. Do not invent a highlight for a genuinely unanswered question.
+7. Preserve unmatched answer detections as `unmappedAnswers`; do not discard them merely because no question matched.
+8. Failure responses must be actionable, per-file where possible, and shown in `/analizer`.
+9. Keep session id propagation through `?session=` and `sessionStorage` intact.
+10. Existing worktrees may contain user changes. Preserve them; do not reset or overwrite unrelated edits.
 
-Canonical types: `lib/types/evaluation.ts` (UI may re-export from `mock-data` during migration).
-
-```ts
-type BoxPct = { x: number; y: number; width: number; height: number }; // 0–100
-
-type AnswerRegion = {
-  page: number; // 1-based
-  box: BoxPct;
-};
-
-type QuestionStatus =
-  | "correct"
-  | "partial"
-  | "incorrect"
-  | "unanswered";
-
-type MappedQuestion = {
-  id: string;
-  number: string; // preserve "11(a)", "3", etc.
-  title?: string;
-  questionText: string;
-  maxMarks: number;
-  marksObtained: number;
-  status: QuestionStatus;
-  studentAnswer: string;
-  modelAnswer?: string;
-  aiRemarks: string;
-  confidence?: number;
-  regions: AnswerRegion[]; // empty ⇒ unanswered
-  // Compatibility with current UI: page + boundingBox derived from regions[0]
-  page: number;
-  boundingBox: BoxPct;
-};
-
-type UnmappedAnswer = {
-  id: string;
-  transcription: string;
-  regions: AnswerRegion[];
-};
-
-type EvaluationSession = {
-  id: string;
-  title: string;
-  subject?: string;
-  grade?: string;
-  studentName?: string;
-  rollNumber?: string;
-  date: string;
-  totalMarks: number;
-  maxMarks: number;
-  percentage: number;
-  totalPages: number;
-  questions: MappedQuestion[];
-  unmappedAnswers: UnmappedAnswer[];
-  pageImagePaths?: string[]; // served via /api/sessions/:id/pages/:n
-};
-```
-
----
-
-## Pipeline
-
-```
-POST /api/evaluate (multipart: questionPaper, answerSheet)
-  → sessionId + in-memory buffers
-  → stages (poll GET /api/sessions/:id/status):
-       1. ingest_rasterize      — answer PDF/images → page PNGs
-       2. validate_documents    — Gemini contextual check (wrong PDF / mismatch)
-       3. extract_questions     — Gemini on QP (skipped if invalid)
-       4. thinking_loop         — agent plan → Google Search grounding → synthesize grader brief
-       5. map_answers           — Gemini on page images + question list + grounded notes
-       6. grade_feedback        — scores / remarks
-  → GET /api/sessions/:id
-       { ok: true, evaluation }  |  { ok: false, failure }
-  → GET /api/sessions/:id/pages/:page — page image bytes
-```
-
-**Wrong PDF / bad upload:** AI returns `SessionFailure` (per-file `issues` + `suggestions`). Client still opens `/analizer` in a **failed state** with contextual guidance and Re-upload CTA. Demo: `forceFail=1` with `demo=1`.
-
-**Contextual rule:** For a real session id, analyzer must not silently fall back to `SAMPLE_EVALUATION`. Show loading until terminal, then AI evaluation or failure.
-
-### Prompt rules (evaluation criteria)
-
-- Extract **every** question in printed order
-- Split labelled sub-parts: `11(a)` and `11(b)` are **two** entries
-- Preserve original numbering strings
-- Map by content + visible labels (`Ans 3`, `Q11(a)`), **not** sheet order alone
-- Handle out-of-order answers
-- Emit unanswered when no region matches
-- Emit unmapped regions that match no question
-- Allow answers spanning multiple pages (`regions.length > 1`)
-- Low temperature + JSON schema / structured output
-
----
-
-## UI map
-
-| Route | Component | Role |
-|-------|-----------|------|
-| `/` | `components/page/upload-page.tsx` | Dual upload + real progress |
-| `/analizer` | `components/page/analyzer-page.tsx` | Question list + document viewer + scores |
-
-**Figma source:** [VedaAI Hiring Assignment](https://www.figma.com/design/GEjt1rt1s7AXvkcr4t8muE/VedaAI-Hiring-Assignment) (`GEjt1rt1s7AXvkcr4t8muE`)
-
-Key frames to match:
-- `1:8744` Upload empty · `1:8797` Upload filled · `1:9959` Loading · `1:8861` Q–A mapping
-
-Chrome: cream canvas + soft grey blobs, white expanded sidebar (`VedaAI`, black **AI Teacher’s Toolkit**, **Exams** active with orange underline), top bar (search / Exams / ? / bell / theme / user), dark **Start Mapping**, analyzer split **Extracted Questions** | **Answer Sheet** with amber answer-region brackets.
-
-Reference exports (gitignored): `.figma-ref/*.png`
-
-After evaluate completes, navigate with `?session=<id>` (or sessionStorage) and fetch session payload. Keep mock `SAMPLE_EVALUATION` as **fallback** when `GEMINI_API_KEY` is missing or `?demo=1`.
-
----
-
-## Folder layout
-
-```
-AGENTS.md
-app/
-  page.tsx                          # upload
-  analizer/page.tsx                 # analyzer (typo kept for existing links)
-  api/evaluate/route.ts
-  api/sessions/[id]/route.ts
-  api/sessions/[id]/status/route.ts
-  api/sessions/[id]/pages/[page]/route.ts
-components/page/                    # product UI
-lib/
-  ai/gemini.ts
-  ai/prompts.ts
-  ai/schemas.ts
-  ai/pipeline.ts
-  geometry/box.ts
-  pdf/rasterize.ts
-  session/store.ts
-  types/evaluation.ts
-```
-
----
-
-## Env & deploy
+## Configuration and Local Checks
 
 ```bash
-GEMINI_API_KEY=...          # server only
-# optional
-GEMINI_MODEL=gemini-2.5-flash   # or current Flash/Pro with vision + structured output
+GEMINI_API_KEY=...                # required for live AI mode
+GEMINI_MODEL=...                  # optional preferred model
+GEMINI_API_KEYS=key1,key2         # optional rotation pool
+ENABLE_GOOGLE_SEARCH=true         # optional grounding search
+SKIP_THINKING_LOOP=true           # optional speed/debug switch
 ```
 
-- Never import the key into client components
-- Deploy (Vercel or similar) with the env var set
-- Document limits: serverless body size, cold starts, in-memory loss on restart
-- Submission needs: live URL, GitHub repo, approach blurb, model used, assumptions
+`lib/ai/gemini.ts` retries quota/rate-limit failures and can rotate through `GEMINI_API_KEYS` and fallback models. Do not claim a specific Gemini model is guaranteed unless it is configured and available in the target project.
 
----
+Useful local commands:
 
-## Edge-case checklist
+```bash
+bun dev
+bun run build
+bun scripts/test-sample.ts
+```
 
-- [ ] Sub-parts as separate questions with original labels
-- [ ] Answers written out of order still map correctly
-- [ ] Unanswered questions show empty regions + clear status
-- [ ] Orphan answers listed separately and highlightable
-- [ ] Multi-page answer regions
-- [ ] Image-only uploads (no PDF) for either side
-- [ ] Progress UI reflects real stages (not only timeouts)
-- [ ] Demo/mock path without API key
+The sample pipeline script requires a valid Gemini key and reads `public/sample/question.pdf` and `public/sample/answer.pdf`. There is no dedicated automated test script in `package.json` yet.
 
----
+## Known Gaps and Risks
 
-## Coding conventions for agents
+- `components/page/question-card.tsx` and `components/page/document-viewer.tsx` still import their interfaces from `mock-data.ts` rather than the canonical `lib/types/evaluation.ts` model. Consolidate these before making broad contract changes.
+- `unmappedAnswers` are persisted in the session response but are not yet surfaced as selectable analyzer UI items.
+- `applyFallbackRegions` in `lib/ai/pipeline.ts` synthesizes page-1 regions for mapped answers that lack a model box. This keeps the demo usable but may misrepresent spatial evidence. Prefer a clear "location unavailable" state for production-quality highlighting.
+- The `grade_feedback` stage currently mainly finalizes results after mapping/grading; grading itself happens in `mapAnswersAndGrade`.
+- The UI accepts only one answer-sheet file, despite plural variable naming. Multiple image uploads are not implemented.
+- Answer-image MIME handling supports more formats server-side than the upload picker exposes. Keep the client accept list and server capabilities aligned when extending formats.
+- In-memory sessions and page buffers disappear after a process restart and are unsuitable for multi-instance/serverless persistence.
+- Inline base64 model inputs and PDF rasterization are constrained by request size, memory, cold starts, and Gemini rate limits.
+- Handwriting transcription and bounding boxes are approximate, especially for scribbles, diagrams, marginal notes, and dense multi-column pages.
+- Assessment policies such as optional question choices, negative marking, total-paper marks, section rules, and partial-credit rubrics need explicit prompt/schema support before their scores should be treated as authoritative.
 
-1. **Reuse** existing shadcn + page components; do not rebuild the shell.
-2. **Extend** evaluation types; avoid a second parallel model for the same concepts.
-3. Highlights = **CSS % overlays** on page images only.
-4. All Gemini calls = **Route Handlers / server modules** only.
-5. Centralize `box_2d` conversion in `lib/geometry/box.ts`.
-6. Comments: short, factual; no narration of obvious code.
-7. Prefer Bun scripts already in `package.json`.
-8. When changing UI, verify in the browser (upload → progress → analyzer click-highlight sync, desktop + mobile).
+## Product Quality Checklist
 
----
+- Extract all questions in printed order and preserve labels such as `11(a)`.
+- Recognize displayed total marks, section instructions, compulsory questions, and optional-choice rules before grading.
+- Handle negative marking and crossed-out/scribbled responses explicitly; never infer a penalty without an assessment rule.
+- Match out-of-order answers by label and content.
+- Show unanswered questions without regions.
+- Support multi-page answer regions.
+- Show and make orphan/unmapped regions selectable.
+- Verify question-card to highlight synchronization and page jumps on desktop and mobile after UI changes.
+- Test success, missing-key demo, and forced document-failure paths.
 
-## Known limitations (be honest in submission)
+## Deployment Notes
 
-- Bounding boxes on messy handwriting are approximate (IoU imperfect).
-- Free-tier rate limits / latency on multi-page sheets.
-- In-memory sessions vanish on server restart / new serverless instance.
-- PDF spatial citations without rasterization are unreliable — we always rasterize answer pages for highlights.
-- Grading quality depends on subject/domain and rubric richness in the question paper.
-
----
-
-## Implementation phases
-
-1. **Docs & types** — this file + `lib/types/evaluation.ts`
-2. **Ingest & session** — store, rasterize, status/page APIs
-3. **Gemini pipeline** — extract → map → grade
-4. **UI wiring** — real progress + page images + multi-region overlays
-5. **Polish & deploy** — errors, demo fallback, live URL
-
----
-
-## Quick reference: current mock UI
-
-- Upload simulates progress then `router.push("/analizer")`
-- Analyzer reads `SAMPLE_EVALUATION` from `components/page/mock-data.ts`
-- `DocumentViewer` overlays use `question.boundingBox` percentages on a **fake** notebook — replace with real page images when pipeline lands
+Set `GEMINI_API_KEY` only in the server environment. A Vercel-style deployment also needs enough function duration and body-size allowance for multipart PDFs and rasterization. Document the in-memory-session limitation and the approximate nature of handwriting boxes in any submission or demo handoff.

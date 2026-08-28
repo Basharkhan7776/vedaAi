@@ -176,11 +176,23 @@ function normalizeModelJson(
     if (parsed && typeof parsed === "object") {
       const obj = parsed as Record<string, unknown>;
       const list = obj.questions ?? obj.items ?? obj.data;
+      const parsedTotal = Number(obj.totalPaperMarks ?? obj.maxMarks ?? obj.totalMarks);
+      const sections = Array.isArray(obj.sections) ? obj.sections.map(normalizeSectionInfo) : [];
+      const instructions = Array.isArray(obj.generalInstructions)
+        ? obj.generalInstructions.map(String)
+        : Array.isArray(obj.instructions)
+          ? obj.instructions.map(String)
+          : [];
+
       return {
         ...obj,
         title: obj.title ? String(obj.title) : undefined,
         subject: obj.subject ? String(obj.subject) : undefined,
         grade: obj.grade ? String(obj.grade) : undefined,
+        totalPaperMarks: Number.isFinite(parsedTotal) && parsedTotal > 0 ? parsedTotal : undefined,
+        duration: obj.duration ? String(obj.duration) : undefined,
+        generalInstructions: instructions,
+        sections,
         questions: Array.isArray(list) ? list.map(normalizeExtractedQuestion) : [],
       };
     }
@@ -235,6 +247,20 @@ function normalizeModelJson(
   return parsed;
 }
 
+function normalizeSectionInfo(s: unknown) {
+  if (!s || typeof s !== "object") return { name: "Section" };
+  const o = s as Record<string, unknown>;
+  return {
+    name: String(o.name ?? o.section ?? "Section"),
+    title: o.title ? String(o.title) : undefined,
+    questionRange: o.questionRange ? String(o.questionRange) : undefined,
+    marksPerQuestion: Number(o.marksPerQuestion ?? o.marks) || undefined,
+    totalMarks: Number(o.totalMarks ?? o.maxMarks) || undefined,
+    isCompulsory: o.isCompulsory !== false,
+    instructions: o.instructions ? String(o.instructions) : undefined,
+  };
+}
+
 function normalizeExtractedQuestion(q: unknown) {
   if (!q || typeof q !== "object") return q;
   const o = q as Record<string, unknown>;
@@ -247,7 +273,11 @@ function normalizeExtractedQuestion(q: unknown) {
     questionText: String(
       o.questionText ?? o.text ?? o.question ?? o.prompt ?? "",
     ),
-    maxMarks: Math.max(1, parsedMarks),
+    maxMarks: Math.max(0.25, parsedMarks),
+    section: o.section ? String(o.section) : undefined,
+    parentQuestionNumber: o.parentQuestionNumber ? String(o.parentQuestionNumber) : undefined,
+    isOptional: Boolean(o.isOptional),
+    choiceGroup: o.choiceGroup ? String(o.choiceGroup) : undefined,
   };
 }
 
@@ -276,7 +306,7 @@ function normalizeMappedAnswer(a: unknown) {
   const regions = Array.isArray(o.regions)
     ? o.regions.map(normalizeRegion).filter(isValidRegion)
     : [];
-  const maxMarks = Math.max(1, Number(o.maxMarks ?? o.max_marks ?? o.maxScore ?? 1) || 1);
+  const maxMarks = Math.max(0.25, Number(o.maxMarks ?? o.max_marks ?? o.maxScore ?? 1) || 1);
   const marksObtained = Math.min(
     maxMarks,
     Math.max(0, Number(o.marksObtained ?? o.score ?? o.marks ?? o.awarded ?? 0) || 0)
@@ -302,9 +332,11 @@ function normalizeMappedAnswer(a: unknown) {
       o.aiRemarks ?? o.feedback ?? o.remarks ?? o.reason ?? "",
     ),
     modelAnswer:
-      o.modelAnswer != null ? String(o.modelAnswer) : undefined,
+      o.modelAnswer != null && o.modelAnswer !== "" ? String(o.modelAnswer) : undefined,
     confidence:
       o.confidence != null ? Number(o.confidence) : undefined,
+    isOptional: Boolean(o.isOptional),
+    choiceGroup: o.choiceGroup ? String(o.choiceGroup) : undefined,
   };
 }
 
@@ -351,12 +383,19 @@ function isValidRegion(
 }
 
 function normalizeStatus(status: unknown) {
-  const s = String(status ?? "unanswered").toLowerCase();
-  if (s === "correct" || s === "partial" || s === "incorrect" || s === "unanswered") {
+  const s = String(status ?? "unanswered").toLowerCase().trim();
+  if (
+    s === "correct" ||
+    s === "partial" ||
+    s === "incorrect" ||
+    s === "unanswered" ||
+    s === "optional_skipped"
+  ) {
     return s;
   }
+  if (s.includes("skip") || s.includes("option") || s.includes("choice")) return "optional_skipped";
   if (s === "full" || s === "right") return "correct";
-  if (s === "wrong" || s === "incorrect") return "incorrect";
+  if (s === "wrong") return "incorrect";
   if (s === "none" || s === "missing" || s === "blank") return "unanswered";
   return "partial";
 }
@@ -513,7 +552,7 @@ export async function extractQuestions(
   return generateJson(
     [
       {
-        text: 'Extract all questions with maxMarks >= 1. Return JSON object: {"title":"...","subject":"...","grade":"...","questions":[{"number":"1","questionText":"...","maxMarks":1}]}',
+        text: 'Extract the full structure: totalPaperMarks, duration, generalInstructions, sections (name, questionRange, marksPerQuestion, totalMarks, isCompulsory), and all questions & subparts with section & maxMarks.',
       },
       filePart(questionPaper),
     ],

@@ -30,23 +30,58 @@ issues items (if any):
 
 Be specific in message + suggestions. If both valid and compatible, issues and suggestions may be empty arrays.`;
 
-export const EXTRACT_QUESTIONS_PROMPT = `You are extracting exam questions from a question paper (PDF or images).
+export const EXTRACT_QUESTIONS_PROMPT = `You are an expert exam analyzer extracting the complete structure from an exam question paper.
 
-Rules:
-1. Extract EVERY question in the printed order.
-2. Treat labelled sub-parts as SEPARATE questions (e.g. "11(a)" and "11(b)" are two distinct entries).
-3. Preserve the original numbering/label exactly in the "number" field (e.g. "1", "2", "3(a)", "11(a)").
-4. Include full question text (and all options/data needed to answer).
-5. Max marks MUST ALWAYS be an integer >= 1 (e.g. 1, 2, 3, 5). If printed on the paper, extract it accurately; if unprinted or 0, default to 1. Never return 0 maxMarks.
-6. Ignore cover pages or instructions that are not exam questions.
-7. Return valid JSON only matching the schema: {"title":"...","subject":"...","grade":"...","questions":[{"number":"1","questionText":"...","maxMarks":1}]}`;
+Read the entire question paper from top to bottom, including header, general instructions, sections, and questions.
+
+Extraction Rules:
+1. HEADER & OVERALL METADATA:
+   - "title": Exam title (e.g. "CBSE Mid-Term Examination")
+   - "subject": Subject name (e.g. "Science", "Mathematics")
+   - "grade": Class / Grade (e.g. "Class VII", "Class 10")
+   - "totalPaperMarks": The TOTAL MAXIMUM MARKS printed at the top of the paper (e.g. 80, 100, 150). This is a critical field!
+   - "duration": Duration if printed (e.g. "2 ½ hrs", "3 Hours")
+   - "generalInstructions": Array of general instruction strings printed at the start.
+
+2. SECTIONS BREAKDOWN:
+   - Extract each section (e.g., "Section A", "Section B", "Section C", "Section D").
+   - Include: name, title (e.g. "Multiple Choice Questions"), questionRange (e.g. "1-15"), marksPerQuestion, totalMarks for the section, isCompulsory (true unless choice), instructions.
+
+3. QUESTIONS & SUB-PARTS:
+   - Extract EVERY question in printed order.
+   - Treat labelled sub-parts as SEPARATE entries (e.g., "22(i)", "22(ii)", "23(i)", "33(a)").
+   - "number": Original label without redundant 'Q.' prefixes (e.g. "1", "16", "22(i)", "23(i)", "33(i)").
+   - "section": The section it belongs to (e.g. "Section A", "Section B").
+   - "parentQuestionNumber": Parent number if it is a sub-part (e.g. "23" for "23(i)").
+   - "maxMarks": Proportional marks for this specific sub-part or question:
+     * Standalone questions get their full section marks (e.g. Q1-15 in Section A get 1 mark each; Q16-18 in Section B get 2 marks each).
+     * Multi-part questions have their section marks divided among sub-parts (e.g., Q22 in 2-mark Section B has (i) and (ii) -> 1 mark each; Q23 in 4-mark Section C has (i) and (ii) -> 2 marks each; Q33 in 5-mark Section D has (i) to (v) -> 1 mark each).
+     * The sum of compulsory questions across the paper must equal totalPaperMarks!
+   - "isOptional": true if this question is an alternative choice (e.g., under an "OR" option).
+   - "choiceGroup": e.g. "Q19_OR" linking mutually exclusive choices.
+
+Return valid JSON only matching the schema:
+{
+  "title": "...",
+  "subject": "...",
+  "grade": "...",
+  "totalPaperMarks": 80,
+  "duration": "2 ½ hrs",
+  "generalInstructions": ["All questions are compulsory.", "..."],
+  "sections": [
+    { "name": "Section A", "title": "Multiple Choice Questions", "questionRange": "1-15", "marksPerQuestion": 1, "totalMarks": 15, "isCompulsory": true, "instructions": "Select one correct option" }
+  ],
+  "questions": [
+    { "number": "1", "section": "Section A", "questionText": "...", "maxMarks": 1, "isOptional": false }
+  ]
+}`;
 
 export const EXTRACT_ANSWERS_PROMPT = `You transcribe student handwritten solutions from answer sheet page images.
 
 Tasks:
 1. Inspect each page image carefully.
 2. Extract all distinct answer sections written by the student.
-3. If the student wrote a question label (e.g. "Ans 1", "Q2", "11(a)", "Section B - 3"), capture it in the "label" field.
+3. If the student wrote a question label (e.g. "Ans 1", "Q.2", "11(a)", "Section B - 3"), capture it in the "label" field.
 4. Transcribe the full handwritten text, mathematical steps, chemical equations, and diagram descriptions into "transcription".
 5. Detect the bounding box for that handwritten answer region as "box_2d": [ymin, xmin, ymax, xmax] integers normalized to 0-1000 on THAT page.
 6. Extract student name and roll number if written on top of the first sheet.
@@ -74,33 +109,31 @@ export function buildMapAndGradePrompt(
     ? `\nGROUNDING / RUBRIC GUIDANCE:\n${groundingNotes}\n`
     : "";
 
-  return `You are evaluating a student's handwritten exam submission.
+  return `You are evaluating a student's handwritten exam submission against the question paper.
 
 ${groundingBlock}
 
-QUESTIONS EXTRACTED FROM QUESTION PAPER:
+QUESTIONS TO EVALUATE:
 ${questionsJson}
 
 EXTRACTED HANDWRITTEN ANSWERS FROM ANSWER SHEET:
 ${answersJson}
 
-Tasks:
-1. Map each extracted answer to its corresponding question using the student's visible labels (e.g. "Ans 1", "Q3") AND semantic content (answers might be written out of order).
-2. If an answer was found for a question:
-   - status: "correct" | "partial" | "incorrect"
-   - marksObtained: award an integer or fractional mark from 0 up to maxMarks.
-   - studentAnswer: full transcribed text.
-   - regions: list of region objects with { "page": number, "box_2d": [ymin, xmin, ymax, xmax] }.
-   - aiRemarks: concise, helpful teacher feedback explaining what was correct or what was missed.
-3. If a question was NOT answered anywhere on the sheet:
-   - status: "unanswered"
-   - marksObtained: 0
-   - regions: []
-   - aiRemarks: "No answer found on the answer sheet."
-4. If there is handwritten text that does not belong to any question, add it to "unmappedAnswers" with its regions.
-5. Provide a brief constructive "overallFeedback" summary.
+Grading Guidelines:
+1. Match each student answer to its target question number using visible labels AND semantic content.
+2. For MCQs (Section A): Check if the selected option letter (A/B/C/D) or text matches the correct answer. Full 1 mark if correct, 0 if incorrect.
+3. For Descriptive / Multi-mark Questions (Section B, C, D):
+   - Award full or partial credit (0 up to maxMarks) based on correctness, completeness, steps, and key concepts.
+   - status: "correct" (full marks), "partial" (partial marks > 0), "incorrect" (0 marks for wrong answer).
+4. For Unanswered Questions:
+   - If no answer was found anywhere on the sheet for a compulsory question: status: "unanswered", marksObtained: 0, regions: [], aiRemarks: "No answer found on the answer sheet."
+5. For Optional / OR Choices:
+   - If the student answered one option in an OR choice pair, grade the attempted option.
+   - For the unattempted alternative option: status: "optional_skipped", marksObtained: 0, regions: [], aiRemarks: "Alternative choice attempted."
+6. Provide concise, constructive "aiRemarks" explaining why marks were awarded or deducted.
+7. Return valid JSON matching the schema.
 
-Return valid JSON only matching the schema:
+Return valid JSON only:
 {
   "studentName": "...",
   "rollNumber": "...",
@@ -108,11 +141,12 @@ Return valid JSON only matching the schema:
     {
       "questionNumber": "1",
       "studentAnswer": "...",
-      "regions": [{ "page": 1, "box_2d": [100, 50, 250, 950] }],
+      "regions": [{ "page": 1, "box_2d": [100, 50, 200, 950] }],
       "status": "correct",
-      "marksObtained": 2,
-      "maxMarks": 2,
-      "aiRemarks": "..."
+      "marksObtained": 1,
+      "maxMarks": 1,
+      "aiRemarks": "Correctly identified pulp cavity as containing nerves and blood vessels.",
+      "isOptional": false
     }
   ],
   "unmappedAnswers": [],
