@@ -138,16 +138,16 @@ async function rasterizePdf(bytes: Buffer, fileName = "answer.pdf"): Promise<Sto
   // Ensure DOM polyfills are active before importing pdf-to-img / pdfjs-dist
   ensureDomPolyfills();
 
-  // Strategy 1: High-speed native poppler `pdftoppm` (if installed on host)
+  // Strategy 1: Node pdf-to-img with preloaded worker module
   try {
-    const pages = await rasterizeWithPdftoppm(bytes);
-    if (pages.length > 0) return pages;
-  } catch (popplerErr) {
-    // Normal in serverless environments without C++ poppler binaries
-  }
+    try {
+      // Preload worker module to prevent runtime filesystem resolution errors in Vercel
+      // @ts-ignore
+      await import("pdfjs-dist/legacy/build/pdf.worker.mjs");
+    } catch {
+      // Worker already loaded or global
+    }
 
-  // Strategy 2: Node pdf-to-img library with DOMMatrix polyfill
-  try {
     const { pdf } = await import("pdf-to-img");
     const document = await pdf(bytes, { scale: 1.5 });
     const pages: StoredPage[] = [];
@@ -165,19 +165,22 @@ async function rasterizePdf(bytes: Buffer, fileName = "answer.pdf"): Promise<Sto
     if (pages.length > 0) return pages;
   } catch (pdfToImgErr) {
     console.warn(
-      "[rasterize] pdf-to-img failed:",
+      "[rasterize] pdf-to-img failed, attempting pdftoppm fallback:",
       pdfToImgErr instanceof Error ? pdfToImgErr.message : pdfToImgErr,
     );
   }
 
-  // Strategy 3: Graceful fallback — pass PDF bytes directly
-  return [
-    {
-      page: 1,
-      mimeType: "application/pdf",
-      bytes,
-    },
-  ];
+  // Strategy 2: High-speed native poppler `pdftoppm` (if installed on host)
+  try {
+    const pages = await rasterizeWithPdftoppm(bytes);
+    if (pages.length > 0) return pages;
+  } catch (popplerErr) {
+    // Normal in serverless environments without C++ poppler binaries
+  }
+
+  throw new Error(
+    `Failed to rasterize "${fileName}". Please ensure the PDF is not password-protected or corrupted.`,
+  );
 }
 
 async function rasterizeWithPdftoppm(bytes: Buffer): Promise<StoredPage[]> {
