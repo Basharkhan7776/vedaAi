@@ -9,14 +9,12 @@ import {
   Clipboard,
   CircleHelp,
   Bell,
-  ChevronDown,
   Sparkles,
   Menu,
   AlertTriangle,
   FileWarning,
   Lightbulb,
   RefreshCw,
-  Layers,
 } from "lucide-react";
 import { SidebarNav } from "./sidebar-nav";
 import { DocumentViewer } from "./document-viewer";
@@ -48,7 +46,6 @@ export function AnalyzerPage() {
     "questions" | "document"
   >("questions");
   const [expandAll, setExpandAll] = useState(false);
-  const [selectedSection, setSelectedSection] = useState<string>("all");
 
   const isDemoBrowse = !sessionId;
   const payload = sessionQuery.data;
@@ -90,27 +87,6 @@ export function AnalyzerPage() {
       setMobileActiveTab("document");
     }
   };
-
-  // Distinct sections
-  const availableSections = useMemo(() => {
-    if (!evaluation) return [];
-    if (evaluation.sections && evaluation.sections.length > 0) {
-      return evaluation.sections;
-    }
-    const secNames = Array.from(
-      new Set(evaluation.questions.map((q) => q.section).filter(Boolean)),
-    ) as string[];
-    return secNames.map((name) => ({ name }));
-  }, [evaluation]);
-
-  // Filtered questions based on selectedSection
-  const filteredQuestions = useMemo(() => {
-    if (!evaluation) return [];
-    if (selectedSection === "all") return evaluation.questions;
-    return evaluation.questions.filter(
-      (q) => (q.section || "General") === selectedSection,
-    );
-  }, [evaluation, selectedSection]);
 
   return (
     <div className="flex h-screen w-full bg-[#EBEBE8] p-2 md:p-3.5 gap-3 overflow-hidden text-neutral-900 font-sans">
@@ -173,23 +149,13 @@ export function AnalyzerPage() {
                 <span className="font-bold text-neutral-900">
                   {evaluation?.title || "Exam Evaluation"}
                 </span>
-                {evaluation?.subject && (
-                  <span className="text-xs px-2 py-0.5 rounded-md bg-neutral-100 text-neutral-600 border border-neutral-200">
-                    {evaluation.subject} {evaluation.grade ? `• ${evaluation.grade}` : ""}
-                  </span>
-                )}
-                {evaluation?.totalPaperMarks && (
-                  <span className="text-xs px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 font-bold border border-emerald-200">
-                    Max: {evaluation.totalPaperMarks} Marks
-                  </span>
-                )}
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <button className="w-9 h-9 rounded-xl bg-neutral-100 flex items-center justify-center">
+              <button className="w-9 h-9 rounded-xl bg-neutral-100 flex items-center justify-center cursor-pointer hover:bg-neutral-200/70 transition-colors">
                 <CircleHelp className="w-4 h-4" />
               </button>
-              <button className="relative w-9 h-9 rounded-xl bg-neutral-100 flex items-center justify-center">
+              <button className="relative w-9 h-9 rounded-xl bg-neutral-100 flex items-center justify-center cursor-pointer hover:bg-neutral-200/70 transition-colors">
                 <Bell className="w-4 h-4" />
                 <span className="absolute top-2 right-2 w-2 h-2 rounded-full bg-[#FF5722]" />
               </button>
@@ -204,7 +170,7 @@ export function AnalyzerPage() {
                   />
                 </div>
                 <span className="text-sm font-semibold">
-                  {evaluation?.studentName || "Madhur Rastogi"}
+                  Madhur Rastogi
                 </span>
               </div>
             </div>
@@ -294,73 +260,12 @@ export function AnalyzerPage() {
                   </button>
                 </div>
 
-                {/* Score & Mapping Stats Summary Bar */}
-                <div className="px-4 py-2 border-b border-neutral-100 flex items-center justify-between text-xs text-neutral-500 bg-[#FAFAFA]">
-                  <div className="flex items-center gap-3">
-                    <span>
-                      {
-                        evaluation.questions.filter(
-                          (q) =>
-                            q.status !== "unanswered" &&
-                            q.status !== "optional_skipped" &&
-                            ((q.regions && q.regions.length > 0) ||
-                              (q.boundingBox?.width ?? 0) > 0),
-                        ).length
-                      }
-                      /{evaluation.questions.length} mapped
-                    </span>
-                    <span className="w-1 h-1 rounded-full bg-neutral-300" />
-                    <span className="font-bold text-neutral-900">
-                      {evaluation.totalMarks}/{evaluation.maxMarks} marks ({evaluation.percentage}%)
-                    </span>
-                  </div>
-
-                  <span className="font-bold text-xs px-2 py-0.5 rounded-full bg-[#EAF8F0] text-[#1E9E54] border border-[#1E9E54]/20">
-                    {evaluation.gradeBadge}
-                  </span>
-                </div>
-
-                {/* Section Navigation Tabs */}
-                {availableSections.length > 1 && (
-                  <div className="px-4 py-2 border-b border-neutral-100 flex items-center gap-1.5 overflow-x-auto no-scrollbar bg-white flex-shrink-0">
-                    <button
-                      onClick={() => setSelectedSection("all")}
-                      className={`px-3 py-1 rounded-full text-xs font-semibold whitespace-nowrap transition-colors cursor-pointer ${
-                        selectedSection === "all"
-                          ? "bg-[#292A2D] text-white shadow-xs"
-                          : "bg-neutral-100 text-neutral-600 hover:bg-neutral-200/70"
-                      }`}
-                    >
-                      All ({evaluation.questions.length})
-                    </button>
-                    {availableSections.map((sec) => {
-                      const count = evaluation.questions.filter(
-                        (q) => (q.section || "General") === sec.name,
-                      ).length;
-                      return (
-                        <button
-                          key={sec.name}
-                          onClick={() => setSelectedSection(sec.name)}
-                          className={`px-3 py-1 rounded-full text-xs font-semibold whitespace-nowrap transition-colors cursor-pointer ${
-                            selectedSection === sec.name
-                              ? "bg-[#292A2D] text-white shadow-xs"
-                              : "bg-neutral-100 text-neutral-600 hover:bg-neutral-200/70"
-                          }`}
-                        >
-                          {sec.name} ({count})
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-
-                {/* Question List with Section Dividers */}
+                {/* Question List with Clean Section Dividers */}
                 <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-[#FAFAFA]">
-                  {filteredQuestions.map((question, idx) => {
+                  {evaluation.questions.map((question, idx) => {
                     const isFirstInSection =
-                      selectedSection === "all" &&
                       question.section &&
-                      (idx === 0 || filteredQuestions[idx - 1].section !== question.section);
+                      (idx === 0 || evaluation.questions[idx - 1].section !== question.section);
 
                     const sectionMeta = evaluation.sections?.find(
                       (s) => s.name === question.section,
@@ -370,7 +275,7 @@ export function AnalyzerPage() {
                       <React.Fragment key={question.id}>
                         {isFirstInSection && (
                           <div className="pt-2 pb-1 first:pt-0">
-                            <div className="flex items-center justify-between px-3.5 py-2 rounded-xl bg-neutral-200/70 border border-neutral-300/70 shadow-2xs">
+                            <div className="flex items-center px-3.5 py-2 rounded-xl bg-neutral-200/70 border border-neutral-300/70 shadow-2xs">
                               <div className="flex items-center gap-2">
                                 <span className="font-extrabold text-xs text-neutral-900 uppercase tracking-wide">
                                   {question.section}
@@ -381,11 +286,6 @@ export function AnalyzerPage() {
                                   </span>
                                 )}
                               </div>
-                              {sectionMeta?.totalMarks && (
-                                <span className="text-[11px] font-bold text-neutral-700 bg-white px-2 py-0.5 rounded-full border border-neutral-200/80 shadow-2xs">
-                                  {sectionMeta.totalMarks} Marks
-                                </span>
-                              )}
                             </div>
                           </div>
                         )}
@@ -445,70 +345,107 @@ function FailedPanel({
   sessionId: string | null;
   hasPageImages?: boolean;
 }) {
+  const [currentPage, setCurrentPage] = useState<number>(1);
+
   return (
-    <div className="flex-1 flex flex-col items-center justify-center p-6 sm:p-10 max-w-2xl mx-auto w-full text-left">
-      <div className="w-14 h-14 rounded-2xl bg-red-100 flex items-center justify-center text-red-600 mb-5 shadow-xs">
-        <AlertTriangle className="w-7 h-7 stroke-[2.2]" />
+    <div className="flex-1 flex flex-col md:flex-row overflow-hidden p-3 md:p-4 gap-4 bg-[#F8F8F6]">
+      <div className="w-full md:w-[48%] lg:w-[46%] flex flex-col h-full bg-white rounded-2xl border border-neutral-200/90 shadow-xs overflow-hidden">
+        <div className="px-5 py-4 border-b border-red-100 bg-red-50/50 flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-red-100 text-red-600 flex items-center justify-center flex-shrink-0">
+            <AlertTriangle className="w-5 h-5" />
+          </div>
+          <div>
+            <h2 className="font-extrabold text-base text-red-950">
+              {failure.title || "Document Validation Failed"}
+            </h2>
+            <p className="text-xs text-red-700 mt-0.5">
+              We couldn’t evaluate these uploaded files.
+            </p>
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-5 space-y-4">
+          <div className="p-3.5 bg-neutral-50 border border-neutral-200/80 rounded-xl text-xs text-neutral-700 leading-relaxed">
+            {failure.summary}
+          </div>
+
+          {failure.issues?.length > 0 && (
+            <div>
+              <h3 className="text-xs font-bold uppercase tracking-wider text-neutral-500 mb-2 flex items-center gap-1.5">
+                <FileWarning className="w-3.5 h-3.5 text-neutral-600" />
+                Detected Issues
+              </h3>
+              <div className="space-y-2">
+                {failure.issues.map((issue, idx) => (
+                  <div
+                    key={idx}
+                    className="p-3 rounded-xl border border-red-200/70 bg-red-50/30 text-xs text-neutral-800 space-y-1.5"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-red-900 capitalize">
+                        {issue.file === "both"
+                          ? "Both Documents"
+                          : issue.file === "questionPaper"
+                            ? "Question Paper"
+                            : "Answer Sheet"}
+                      </span>
+                      <span className="text-[10px] px-2 py-0.5 rounded bg-red-100 text-red-800 font-mono">
+                        {issue.code}
+                      </span>
+                    </div>
+                    <p className="text-neutral-700">{issue.message}</p>
+                    {issue.suggestions && issue.suggestions.length > 0 && (
+                      <ul className="list-disc list-inside text-neutral-600 pl-1 space-y-0.5 text-[11px]">
+                        {issue.suggestions.map((s, sIdx) => (
+                          <li key={sIdx}>{s}</li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {failure.suggestions?.length > 0 && (
+            <div>
+              <h3 className="text-xs font-bold uppercase tracking-wider text-neutral-500 mb-2 flex items-center gap-1.5">
+                <Lightbulb className="w-3.5 h-3.5 text-amber-500" />
+                What to do next
+              </h3>
+              <ul className="p-3 bg-amber-50/40 border border-amber-200/60 rounded-xl space-y-1.5 text-xs text-neutral-800">
+                {failure.suggestions.map((s, idx) => (
+                  <li key={idx} className="flex items-start gap-2">
+                    <span className="font-bold text-amber-700">•</span>
+                    <span>{s}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          <div className="pt-2">
+            <Link
+              href="/"
+              className="w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-neutral-900 hover:bg-neutral-800 text-white rounded-xl text-xs font-bold shadow-xs transition-colors"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              Upload New Documents
+            </Link>
+          </div>
+        </div>
       </div>
 
-      <h2 className="text-xl sm:text-2xl font-extrabold text-neutral-900 text-center tracking-tight">
-        {failure.title || "Evaluation Could Not Be Completed"}
-      </h2>
-      <p className="text-sm text-neutral-600 mt-2 text-center max-w-md leading-relaxed">
-        {failure.summary ||
-          "There was an issue processing or verifying your exam documents."}
-      </p>
-
-      {failure.issues && failure.issues.length > 0 && (
-        <div className="w-full bg-[#FFFBFB] rounded-2xl border border-red-200/80 p-4 sm:p-5 mt-6 space-y-3">
-          <div className="flex items-center gap-2 text-xs font-bold text-red-800 uppercase tracking-wider">
-            <FileWarning className="w-4 h-4" />
-            Detected Issues
-          </div>
-          <div className="space-y-2">
-            {failure.issues.map((issue, idx) => (
-              <div
-                key={idx}
-                className="bg-white p-3 rounded-xl border border-red-100 text-xs text-neutral-800 space-y-1"
-              >
-                <div className="font-semibold text-red-900">
-                  {issue.file === "questionPaper"
-                    ? "📄 Question Paper"
-                    : issue.file === "answerSheet"
-                      ? "📝 Answer Sheet"
-                      : "📑 Uploaded Files"}
-                </div>
-                <p className="text-neutral-600 leading-normal font-normal">
-                  {issue.message}
-                </p>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {failure.suggestions && failure.suggestions.length > 0 && (
-        <div className="w-full bg-[#FAFAFA] rounded-2xl border border-neutral-200/80 p-4 sm:p-5 mt-4 space-y-2">
-          <div className="flex items-center gap-2 text-xs font-bold text-neutral-700 uppercase tracking-wider">
-            <Lightbulb className="w-4 h-4 text-amber-500" />
-            Suggested Actions
-          </div>
-          <ul className="list-disc list-inside text-xs text-neutral-600 space-y-1 font-normal">
-            {failure.suggestions.map((sug, idx) => (
-              <li key={idx}>{sug}</li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      <div className="mt-8 flex items-center gap-3">
-        <Link
-          href="/"
-          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-[#FF5722] text-white font-bold text-xs hover:bg-[#F4511E] transition-colors shadow-sm"
-        >
-          <RefreshCw className="w-4 h-4" />
-          Upload New Documents
-        </Link>
+      <div className="w-full md:w-[52%] lg:w-[54%] h-full flex flex-col">
+        <DocumentViewer
+          questions={[]}
+          selectedQuestionId=""
+          onSelectQuestion={() => {}}
+          currentPage={currentPage}
+          onPageChange={setCurrentPage}
+          totalPages={1}
+          sessionId={hasPageImages ? sessionId : null}
+        />
       </div>
     </div>
   );
