@@ -11,6 +11,19 @@ const execAsync = promisify(exec);
 function ensureDomPolyfills() {
   const g = globalThis as unknown as Record<string, unknown>;
 
+  // Attempt to load native canvas objects from @napi-rs/canvas
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const canvas = require("@napi-rs/canvas");
+    if (!g.DOMMatrix && canvas.DOMMatrix) g.DOMMatrix = canvas.DOMMatrix;
+    if (!g.DOMPoint && canvas.DOMPoint) g.DOMPoint = canvas.DOMPoint;
+    if (!g.DOMRect && canvas.DOMRect) g.DOMRect = canvas.DOMRect;
+    if (!g.ImageData && canvas.ImageData) g.ImageData = canvas.ImageData;
+    if (!g.Path2D && canvas.Path2D) g.Path2D = canvas.Path2D;
+  } catch {
+    // @napi-rs/canvas optional fallback
+  }
+
   if (typeof g.DOMMatrix === "undefined") {
     class DOMMatrixPolyfill {
       a = 1; b = 0; c = 0; d = 1; e = 0; f = 0;

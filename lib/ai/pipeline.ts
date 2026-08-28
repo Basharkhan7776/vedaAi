@@ -26,6 +26,7 @@ import type {
   PipelineProgressEvent,
   PipelineStage,
   SessionFailure,
+  StoredPage,
   UnmappedAnswer,
 } from "@/lib/types/evaluation";
 import type {
@@ -115,11 +116,16 @@ export async function runEvaluationPipeline(
       15,
       "Ingesting & rendering answer sheet pages…",
     );
-    let pages;
+    let pages: StoredPage[];
     try {
-      pages = await rasterizeAnswerSheet(session.answerSheet);
-      setAnswerPages(sessionId, pages);
-      console.log(`✅ [pipeline] [1/6] Rasterized ${pages.length} answer page(s) successfully.`);
+      if (session.answerPages && session.answerPages.length > 0) {
+        pages = session.answerPages;
+        console.log(`✅ [pipeline] [1/6] Using ${pages.length} pre-rasterized answer page(s).`);
+      } else {
+        pages = await rasterizeAnswerSheet(session.answerSheet);
+        setAnswerPages(sessionId, pages);
+        console.log(`✅ [pipeline] [1/6] Rasterized ${pages.length} answer page(s) successfully.`);
+      }
     } catch (rasterErr) {
       const message =
         rasterErr instanceof Error
