@@ -16,6 +16,8 @@ import {
   ChevronDown,
   Sparkles,
   AlertCircle,
+  Loader2,
+  Check,
 } from "lucide-react";
 import { SidebarNav } from "./sidebar-nav";
 import { useSessionStatus, useStartEvaluation } from "@/lib/api/hooks";
@@ -78,24 +80,17 @@ export function UploadPage() {
     enabled: Boolean(activeSessionId) && !isStreaming,
   });
 
+  const isSubmitting = isStreaming || startMutation.isPending;
   const effectiveStatus = liveProgress || statusQuery.data;
-  const isEvaluating = isStreaming || (Boolean(activeSessionId) && !effectiveStatus?.terminal);
-  const evaluationStep = STAGE_TO_STEP[effectiveStatus?.stage ?? "queued"] ?? 0;
+  const isEvaluating = isSubmitting || (Boolean(activeSessionId) && !effectiveStatus?.terminal);
+  const currentMilestoneIndex = STAGE_TO_STEP[effectiveStatus?.stage ?? "queued"] ?? 0;
+  const rawProgress = effectiveStatus?.progress ?? (isSubmitting ? 15 : 5);
+  const progressPercent = Math.min(100, Math.max(5, rawProgress));
   const statusLabel =
     effectiveStatus?.stageLabel ||
     "Please wait, while we evaluate the answer sheets...";
 
   const isReady = Boolean(questionPaper && answerSheets);
-
-  const evaluationSteps = useMemo(
-    () => [
-      "Ingesting & rendering answer sheet pages…",
-      "Validating documents & extracting questions…",
-      "Agent thinking + Google Search grounding…",
-      "Mapping answers & generating AI feedback…",
-    ],
-    [],
-  );
 
   // When Gemini pipeline finishes in legacy fallback mode, open analyzer with session
   useEffect(() => {
@@ -310,10 +305,6 @@ export function UploadPage() {
     else setAnswerSheets(meta);
   };
 
-  const showEvaluating =
-    startMutation.isPending ||
-    (Boolean(activeSessionId) && !statusQuery.data?.terminal);
-
   return (
     <div className="flex h-screen w-full bg-[#EBEBE8] p-2 md:p-3.5 gap-3 overflow-hidden text-neutral-900 font-sans">
       {/* Hidden file pickers */}
@@ -366,7 +357,7 @@ export function UploadPage() {
               <Link
                 href="/"
                 onClick={(e) => {
-                  if (showEvaluating) {
+                  if (isEvaluating) {
                     e.preventDefault();
                     setActiveSessionId(null);
                   }
@@ -417,7 +408,7 @@ export function UploadPage() {
               <Link
                 href="/"
                 onClick={(e) => {
-                  if (showEvaluating) {
+                  if (isEvaluating) {
                     e.preventDefault();
                     setActiveSessionId(null);
                   }
@@ -480,46 +471,38 @@ export function UploadPage() {
         </header>
 
         {/* Conditional Rendering: In-Page Loading Screen VS Upload Screen */}
-        {showEvaluating ? (
+        {isEvaluating ? (
           /* ========================================================= */
-          /* IN-PAGE LOADING SCREEN (Figma Frame 1:9959 with /loading-icon.png) */
+          /* IN-PAGE LOADING SCREEN (Figma Exact Match + Sleek Bar)   */
           /* ========================================================= */
-          <main className="flex-1 max-w-2xl w-full mx-auto p-6 md:p-12 flex flex-col items-center justify-center text-center animate-in fade-in zoom-in-95 duration-300">
-            <div className="relative mb-6 w-28 h-28 sm:w-36 sm:h-36 flex items-center justify-center select-none">
-              <div className="absolute inset-0 rounded-full bg-orange-500/15 animate-ping opacity-60" />
+          <main className="flex-1 w-full mx-auto flex flex-col items-center justify-center text-center select-none animate-in fade-in zoom-in-95 duration-300">
+            <div className="relative mb-6 w-28 h-28 sm:w-36 sm:h-36 flex items-center justify-center">
               <Image
                 src="/loading-icon.png"
-                alt="Loading..."
+                alt="Extracting..."
                 width={144}
                 height={144}
-                className="w-full h-full object-contain animate-pulse drop-shadow-sm"
+                className="w-full h-full object-contain animate-pulse drop-shadow-xs"
                 priority
               />
             </div>
 
-            <h2 className="text-2xl sm:text-3xl font-extrabold text-neutral-900 tracking-tight mb-2">
-              Analyzing your sheets...
+            <h2 className="text-2xl sm:text-3xl font-extrabold text-neutral-900 tracking-tight mb-2 font-sans">
+              Extracting...
             </h2>
-            <p className="text-sm sm:text-base text-neutral-500 max-w-md mx-auto mb-8 font-normal">
-              {statusLabel || "This might take a few moments."}
+            <p className="text-sm sm:text-base text-neutral-500 font-normal tracking-tight mb-6">
+              This may take a while
             </p>
 
-            <div className="w-full max-w-md bg-neutral-100 rounded-full h-2 overflow-hidden mb-4 shadow-inner">
+            {/* Unlabeled Minimalist Progress Bar */}
+            <div className="w-64 sm:w-80 max-w-xs bg-neutral-100 rounded-full h-2 overflow-hidden shadow-inner border border-neutral-200/60">
               <div
-                className="bg-gradient-to-r from-[#FF5722] to-orange-400 h-full transition-all duration-700 rounded-full"
-                style={{
-                  width: `${Math.max(
-                    8,
-                    statusQuery.data?.progress ??
-                      ((evaluationStep + 1) / evaluationSteps.length) * 100,
-                  )}%`,
-                }}
-              />
+                className="h-full rounded-full bg-gradient-to-r from-[#FF5722] to-orange-400 transition-all duration-700 ease-out relative overflow-hidden"
+                style={{ width: `${progressPercent}%` }}
+              >
+                <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/30 to-transparent animate-pulse" />
+              </div>
             </div>
-
-            <p className="text-xs text-neutral-400 font-medium tracking-tight">
-              {evaluationSteps[evaluationStep]}
-            </p>
           </main>
         ) : (
           /* ========================================================= */
@@ -673,17 +656,26 @@ export function UploadPage() {
               <button
                 type="button"
                 onClick={handleStartEvaluation}
-                disabled={!isReady || startMutation.isPending}
-                className={`w-full sm:w-auto px-9 py-3 sm:py-3.5 rounded-full text-sm sm:text-base font-medium transition-all flex items-center justify-center gap-2 ${
-                  isReady
-                    ? "bg-neutral-900 hover:bg-[#FF5722] text-white shadow-md cursor-pointer hover:scale-105"
-                    : "bg-[#C5C8CD] text-white cursor-not-allowed opacity-90"
+                disabled={!isReady || isSubmitting}
+                className={`w-full sm:w-auto px-9 py-3 sm:py-3.5 rounded-full text-sm sm:text-base font-semibold transition-all flex items-center justify-center gap-2.5 ${
+                  isSubmitting
+                    ? "bg-neutral-800 text-white cursor-wait opacity-90 shadow-md"
+                    : isReady
+                      ? "bg-neutral-900 hover:bg-[#FF5722] text-white shadow-md cursor-pointer hover:scale-105 active:scale-95"
+                      : "bg-[#C5C8CD] text-white cursor-not-allowed opacity-90"
                 }`}
               >
-                <span>
-                  {startMutation.isPending ? "Starting…" : "Start Mapping"}
-                </span>
-                <ArrowRight className="w-4 h-4 stroke-[2.2]" />
+                {isSubmitting ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin text-[#FF5722]" />
+                    <span>Loading...</span>
+                  </>
+                ) : (
+                  <>
+                    <span>Start Mapping</span>
+                    <ArrowRight className="w-4 h-4 stroke-[2.2]" />
+                  </>
+                )}
               </button>
 
               <p className="text-xs sm:text-sm text-neutral-500 font-normal text-center max-w-md px-2">
