@@ -62,20 +62,40 @@ export const PipelineTokenTracker = {
   },
 };
 
+const invalidKeys = new Set<string>();
+
 function getApiKeys(): string[] {
   const primary = process.env.GEMINI_API_KEY;
   const list = process.env.GEMINI_API_KEYS
     ? process.env.GEMINI_API_KEYS.split(",").map((k) => k.trim())
     : [];
   const keys = [primary, ...list].filter(Boolean) as string[];
-  return Array.from(new Set(keys));
+  return Array.from(new Set(keys)).filter((k) => !invalidKeys.has(k));
+}
+
+export function getCurrentKey(): string | null {
+  const keys = getApiKeys();
+  if (keys.length === 0) return null;
+  return keys[currentKeyIndex % keys.length];
+}
+
+export function markCurrentKeyInvalid() {
+  const key = getCurrentKey();
+  if (key) {
+    invalidKeys.add(key);
+    const remaining = getApiKeys();
+    console.warn(`[gemini] Blacklisted invalid/unauthorized API key: ${key.slice(0, 12)}... (Remaining valid keys: ${remaining.length})`);
+    if (remaining.length > 0) {
+      currentKeyIndex = currentKeyIndex % remaining.length;
+    }
+  }
 }
 
 export function getClient() {
   const keys = getApiKeys();
   if (keys.length === 0) {
     throw new Error(
-      "GEMINI_API_KEY is not set. Add it to .env.local or use demo mode.",
+      "GEMINI_API_KEY is not set or all provided keys are invalid. Add valid keys in .env.local or use demo mode.",
     );
   }
   const key = keys[currentKeyIndex % keys.length];
@@ -607,6 +627,34 @@ async function generateJson<T>(
     return result.data;
   } catch (err: any) {
     const errStr = String(err?.message || "");
+    const isAuthError =
+      errStr.includes("401") ||
+      errStr.includes("UNAUTHENTICATED") ||
+      errStr.includes("invalid authentication credentials") ||
+      errStr.includes("ACCESS_TOKEN_TYPE_UNSUPPORTED") ||
+      errStr.includes("API_KEY_INVALID");
+
+    if (isAuthError) {
+      console.warn(`[gemini] 401 Auth error detected on current API key. Blacklisting and rotating key...`);
+      markCurrentKeyInvalid();
+      if (getApiKeys().length > 0 && attempt <= 6) {
+        return generateJson(parts, schema, systemInstruction, kind, attempt + 1);
+      }
+    }
+
+    const isModelNotFound =
+      errStr.includes("404") ||
+      errStr.includes("not found") ||
+      errStr.includes("no longer available");
+
+    if (isModelNotFound) {
+      console.warn(`[gemini] Model "${currentModel}" not available (404). Switching model...`);
+      rotateModel();
+      if (attempt <= 6) {
+        return generateJson(parts, schema, systemInstruction, kind, attempt + 1);
+      }
+    }
+
     const isServiceUnavailable =
       errStr.includes("503") ||
       errStr.includes("high demand") ||

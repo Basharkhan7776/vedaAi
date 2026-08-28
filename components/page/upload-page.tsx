@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { SidebarNav } from "./sidebar-nav";
 import { useSessionStatus, useStartEvaluation } from "@/lib/api/hooks";
+import { saveClientSession } from "@/lib/session/client-cache";
 import type { PipelineProgressEvent, SessionStatus } from "@/lib/types/evaluation";
 
 type UploadMeta = {
@@ -242,18 +243,15 @@ export function UploadPage() {
                 ready: true,
                 terminal: true,
               });
-              if (typeof window !== "undefined" && event.sessionId) {
-                sessionStorage.setItem("veda-session-id", event.sessionId);
-                sessionStorage.setItem(
-                  `veda-session-data-${event.sessionId}`,
-                  JSON.stringify({
-                    ok: true,
-                    evaluation: event.evaluation,
-                    pageImages: event.pageImages,
-                    hasPageImages: Boolean(event.pageImages?.length),
-                  }),
-                );
+              if (event.sessionId) {
+                await saveClientSession(event.sessionId, {
+                  ok: true,
+                  evaluation: event.evaluation,
+                  pageImages: event.pageImages,
+                  hasPageImages: Boolean(event.pageImages?.length),
+                });
               }
+              setIsStreaming(false);
               router.push(`/analizer?session=${event.sessionId || finalSessionId}`);
               return;
             } else if (event.type === "failure") {
@@ -266,21 +264,22 @@ export function UploadPage() {
                 ready: false,
                 terminal: true,
               });
-              if (typeof window !== "undefined" && event.sessionId) {
-                sessionStorage.setItem("veda-session-id", event.sessionId);
-                sessionStorage.setItem(
-                  `veda-session-data-${event.sessionId}`,
-                  JSON.stringify({
-                    ok: false,
-                    failure: event.failure,
-                    hasPageImages: false,
-                  }),
-                );
+              if (event.sessionId) {
+                await saveClientSession(event.sessionId, {
+                  ok: false,
+                  failure: event.failure,
+                  hasPageImages: false,
+                });
               }
+              setIsStreaming(false);
               router.push(`/analizer?session=${event.sessionId || finalSessionId}`);
               return;
             } else if (event.type === "error") {
-              throw new Error(event.error || "Evaluation pipeline error");
+              const errMsg = event.error || "Evaluation pipeline error";
+              setEvalError(errMsg);
+              setIsStreaming(false);
+              setLiveProgress(null);
+              return;
             }
           } catch (parseErr) {
             console.error("Stream parse error:", parseErr, line);

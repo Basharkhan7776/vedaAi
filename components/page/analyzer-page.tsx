@@ -21,6 +21,7 @@ import { DocumentViewer } from "./document-viewer";
 import { QuestionCard } from "./question-card";
 import { SAMPLE_EVALUATION } from "./mock-data";
 import { useEvaluationSession } from "@/lib/api/hooks";
+import { getClientSessionAsync, getClientSessionSync, type CachedSession } from "@/lib/session/client-cache";
 import type { EvaluationSession, MappedQuestion, SessionFailure } from "@/lib/types/evaluation";
 
 export function AnalyzerPage() {
@@ -34,16 +35,24 @@ export function AnalyzerPage() {
     return null;
   }, [sessionIdFromQuery]);
 
-  // Read cached session data from client storage if available
-  const cachedData = useMemo(() => {
-    if (typeof window === "undefined" || !sessionId) return null;
-    try {
-      const raw = sessionStorage.getItem(`veda-session-data-${sessionId}`);
-      if (raw) return JSON.parse(raw);
-    } catch {
-      // Ignore
-    }
-    return null;
+  // Read cached session data synchronously (0ms)
+  const [cachedData, setCachedData] = useState<CachedSession | null>(() => {
+    if (!sessionId) return null;
+    return getClientSessionSync(sessionId);
+  });
+
+  // Asynchronously load rich payload (like pageImages from IndexedDB)
+  useEffect(() => {
+    if (!sessionId) return;
+    let isMounted = true;
+    getClientSessionAsync(sessionId).then((rich) => {
+      if (isMounted && rich) {
+        setCachedData(rich);
+      }
+    });
+    return () => {
+      isMounted = false;
+    };
   }, [sessionId]);
 
   const sessionQuery = useEvaluationSession(sessionId, {
@@ -88,7 +97,8 @@ export function AnalyzerPage() {
 
   const isLoading =
     Boolean(sessionId) &&
-    !cachedData &&
+    !cachedData?.evaluation &&
+    !cachedData?.failure &&
     (sessionQuery.isLoading ||
       (payload && !payload.ok && "pending" in payload && payload.pending) ||
       (payload && !payload.ok && !payload.failure && !payload.status?.terminal));
