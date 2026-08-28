@@ -1,1 +1,1 @@
-- On click to any questions will show that particular highlight, inner shade of the high light should be low. Highlight mechanism is not working well try to debug and fix it.
+- If question paper have no sections how it will react and respond.
